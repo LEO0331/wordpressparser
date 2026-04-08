@@ -321,7 +321,11 @@ app.post("/api/generate", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`wordpress-parser running at http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`wordpress-parser running at http://localhost:${port}`);
+  });
+}
+
+export default app;
