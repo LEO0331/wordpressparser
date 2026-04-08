@@ -67,6 +67,7 @@ label {
 
 input[type="url"],
 input[type="file"],
+input[type="text"],
 textarea,
 select {
   width: 100%;

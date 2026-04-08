@@ -1,11 +1,33 @@
-# WordPress Persona Parser
+# WordPress Author Skill Pipeline
 
-Simple full-stack webpage that:
-- accepts WordPress JSON exports or a WordPress URL,
-- supports pasted raw JSON directly in the UI,
-- normalizes post/page content,
-- generates a reusable `skill.md` with preset schemas,
-- optionally exports `rag.json` chunks for retrieval systems.
+Node-first pipeline that turns WordPress sources into a reusable `skill.md`.
+
+## What it does
+
+- Ingests WordPress JSON, URL, or pasted JSON in the UI
+- Normalizes posts/pages into a corpus
+- Analyzes two tracks:
+  - Knowledge
+  - Persona (writing tone/style)
+- Builds artifacts:
+  - `skill.md` (primary)
+  - `knowledge.md`
+  - `persona.md`
+  - `rag.json`
+  - `meta.json`
+- Stores profiles under `profiles/{slug}/` with version snapshots
+
+## Language support
+
+- English (`en`)
+- Traditional Chinese (`zh-TW`)
+
+## Generation modes
+
+- `ai` mode: uses `OPENAI_API_KEY` and model generation
+- `parser` mode: deterministic fallback when no API key is present
+
+If `OPENAI_API_KEY` is missing, the system automatically falls back to parser mode.
 
 ## Quick start
 
@@ -18,22 +40,38 @@ Open `http://localhost:3000`.
 
 ## Environment
 
-Set `OPENAI_API_KEY` to enable built-in AI generation.
+- `OPENAI_API_KEY` (optional)
+- `OPENAI_MODEL` (optional, default `gpt-4.1-mini`)
+- `PORT` (optional, default `3000`)
 
-Optional:
-- `OPENAI_MODEL` (default: `gpt-4.1-mini`)
-- `PORT` (default: `3000`)
+## API
 
-Without an API key, the app still generates a deterministic fallback `skill.md`.
+- `POST /api/normalize`
+  - body: `{ "data": <wordpress_json> }`
+- `POST /api/extract-url`
+  - body: `{ "url": "https://example.wordpress.com/" }`
+- `POST /api/analyze`
+  - body: `{ "items": [...], "options": { "language": "en|zh-TW|auto", "mode": "parser|ai" } }`
+- `POST /api/build`
+  - body: `{ "slug": "x", "name": "X", "items": [...], "options": { ... } }`
+- `POST /api/profiles/save`
+  - body: same as build, persists artifacts under `profiles/{slug}/`
+- `GET /api/profiles`
+- `GET /api/profiles/:slug`
+- `POST /api/profiles/:slug/update`
+  - body: `{ "items": [...], "options": { ... } }`
+- `POST /api/profiles/:slug/correct`
+  - body: `{ "scope": "knowledge|persona", "correction": "..." }`
+- `POST /api/profiles/:slug/rollback`
+  - body: `{ "version": "vN-....json" }`
 
-## API endpoints
+## Node utilities
 
-- `POST /api/normalize` with `{ "data": <wordpress_json_object> }`
-- `POST /api/extract-url` with `{ "url": "https://example.wordpress.com/" }`
-- `POST /api/generate` with `{ "items": [...], "options": { "language": "auto|English|Traditional Chinese", "preset": "default|codex_skill|rag_profile" } }`
+- `node node_tools/version_manager.js backup <slug>`
+- `node node_tools/version_manager.js list <slug>`
+- `node node_tools/version_manager.js rollback <slug> <version>`
+- `node node_tools/skill_writer.js <slug>`
 
-## Notes
+## Reference design assets
 
-- URL import tries `wp-json/wp/v2/posts|pages` first, then WordPress.com official REST v1.1 (`public-api.wordpress.com/rest/v1.1/sites/<host>/posts`) including `type=post|page`.
-- RAG chunks use 1200-char chunks with 200-char overlap and metadata (`title`, `date`, `url`).
-- Parser supports WordPress.com v1.1 sample payloads (`found`, `posts`, uppercase `URL`, taxonomy objects).
+`create-author-skill/` contains skill and prompt templates aligned with this pipeline design.

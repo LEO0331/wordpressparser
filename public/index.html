@@ -35,15 +35,26 @@
 
         <div class="grid">
           <div>
+            <label for="profileSlug">Profile slug</label>
+            <input id="profileSlug" type="text" placeholder="leo-li-cheng" />
+          </div>
+          <div>
+            <label for="profileName">Display name</label>
+            <input id="profileName" type="text" placeholder="Leo Li Cheng" />
+          </div>
+        </div>
+
+        <div class="grid">
+          <div>
             <label for="languageMode">Output language</label>
             <select id="languageMode">
               <option value="auto">Match source (auto)</option>
-              <option value="English">English</option>
-              <option value="Traditional Chinese">Traditional Chinese</option>
+              <option value="en">English</option>
+              <option value="zh-TW">Traditional Chinese</option>
             </select>
           </div>
           <div>
-            <label for="outputMode">Output mode</label>
+            <label for="outputMode">Artifact output</label>
             <select id="outputMode">
               <option value="skill">Skill.md only</option>
               <option value="both">Skill.md + RAG</option>
@@ -51,17 +62,17 @@
           </div>
         </div>
         <div>
-          <label for="presetMode">Skill preset template</label>
-          <select id="presetMode">
-            <option value="default">General Skill</option>
-            <option value="codex_skill">Codex Skill (strict)</option>
-            <option value="rag_profile">RAG Profile (strict)</option>
+          <label for="generationMode">Generation mode</label>
+          <select id="generationMode">
+            <option value="parser">Parser only (no API key required)</option>
+            <option value="ai">AI mode (requires OPENAI_API_KEY)</option>
           </select>
         </div>
 
         <div class="actions">
           <button id="parseBtn" type="button">1. Parse Source</button>
           <button id="generateBtn" type="button" disabled>2. Generate Artifacts</button>
+          <button id="saveBtn" type="button" disabled>3. Save Profile</button>
         </div>
 
         <div id="status" class="status">Waiting for input.</div>

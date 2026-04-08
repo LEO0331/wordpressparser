@@ -1,7 +1,11 @@
 const state = {
   sourceMode: "json",
   items: [],
+  parsedRawSource: null,
   skillMarkdown: "",
+  knowledgeMarkdown: "",
+  personaMarkdown: "",
+  meta: null,
   rag: [],
   activeOutput: "skill"
 };
@@ -14,11 +18,14 @@ const el = {
   jsonFile: document.getElementById("jsonFile"),
   jsonText: document.getElementById("jsonText"),
   wpUrl: document.getElementById("wpUrl"),
+  profileSlug: document.getElementById("profileSlug"),
+  profileName: document.getElementById("profileName"),
   languageMode: document.getElementById("languageMode"),
   outputMode: document.getElementById("outputMode"),
-  presetMode: document.getElementById("presetMode"),
+  generationMode: document.getElementById("generationMode"),
   parseBtn: document.getElementById("parseBtn"),
   generateBtn: document.getElementById("generateBtn"),
+  saveBtn: document.getElementById("saveBtn"),
   status: document.getElementById("status"),
   stats: document.getElementById("stats"),
   tabSkill: document.getElementById("tabSkill"),
@@ -74,7 +81,9 @@ async function parseFromJson() {
   if (rawText) {
     try {
       const payload = JSON.parse(rawText);
-      return postJson("/api/normalize", { data: payload });
+      const parsed = await postJson("/api/normalize", { data: payload });
+      state.parsedRawSource = payload;
+      return parsed;
     } catch {
       throw new Error("Invalid pasted JSON format.");
     }
@@ -91,12 +100,15 @@ async function parseFromJson() {
     throw new Error("Invalid JSON format.");
   }
 
-  return postJson("/api/normalize", { data: payload });
+  const parsed = await postJson("/api/normalize", { data: payload });
+  state.parsedRawSource = payload;
+  return parsed;
 }
 
 async function parseFromUrl() {
   const url = el.wpUrl.value.trim();
   if (!url) throw new Error("Enter a WordPress URL.");
+  state.parsedRawSource = { url };
   return postJson("/api/extract-url", { url });
 }
 
@@ -128,6 +140,7 @@ async function handleParse() {
     }
     renderStats(state.items, parsed.metadata || { itemCount: state.items.length });
     el.generateBtn.disabled = false;
+    el.saveBtn.disabled = true;
     setStatus(`Parsed ${state.items.length} items. Ready to generate.`);
   } catch (error) {
     setStatus(error.message, true);
@@ -139,23 +152,60 @@ async function handleGenerate() {
     if (!state.items.length) throw new Error("Parse data first.");
     setStatus("Generating artifacts...");
     const mode = el.outputMode.value;
+    const slug = el.profileSlug.value.trim() || "author-profile";
+    const name = el.profileName.value.trim() || "Author";
     const response = await postJson("/api/generate", {
       items: state.items,
       options: {
         language: el.languageMode.value,
-        preset: el.presetMode.value
-      }
+        mode: el.generationMode.value,
+        slug,
+        name
+      },
+      slug,
+      name
     });
 
     state.skillMarkdown = response.skillMarkdown || "";
+    state.knowledgeMarkdown = response.knowledgeMarkdown || "";
+    state.personaMarkdown = response.personaMarkdown || "";
+    state.meta = response.meta || null;
     state.rag = mode === "both" ? response.rag || [] : [];
     switchOutputTab("skill");
 
     el.downloadSkillBtn.disabled = !state.skillMarkdown;
     el.downloadRagBtn.disabled = !(mode === "both" && state.rag.length);
+    el.saveBtn.disabled = !state.skillMarkdown;
 
-    const engine = response.metadata?.aiUsed ? "AI model" : "fallback profile builder";
-    setStatus(`Generation done using ${engine}. Preset: ${response.metadata?.preset || el.presetMode.value}.`);
+    const engine = response.metadata?.aiUsed ? "AI model" : "parser mode";
+    setStatus(`Generation done using ${engine}. Effective mode: ${response.metadata?.modeUsed || "parser"}.`);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function handleSave() {
+  try {
+    if (!state.items.length || !state.skillMarkdown) {
+      throw new Error("Generate artifacts before saving.");
+    }
+    setStatus("Saving profile...");
+    const slug = el.profileSlug.value.trim() || "author-profile";
+    const name = el.profileName.value.trim() || "Author";
+
+    const response = await postJson("/api/profiles/save", {
+      slug,
+      name,
+      items: state.items,
+      rawSource: state.parsedRawSource,
+      options: {
+        language: el.languageMode.value,
+        mode: el.generationMode.value,
+        sourceTypes: [state.sourceMode === "json" ? "wordpress_json" : "wordpress_url"]
+      }
+    });
+
+    setStatus(`Saved profile '${response.storage?.slug}' to ${response.storage?.profileDir}.`);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -165,6 +215,7 @@ el.sourceJsonBtn.addEventListener("click", () => switchSource("json"));
 el.sourceUrlBtn.addEventListener("click", () => switchSource("url"));
 el.parseBtn.addEventListener("click", handleParse);
 el.generateBtn.addEventListener("click", handleGenerate);
+el.saveBtn.addEventListener("click", handleSave);
 el.tabSkill.addEventListener("click", () => switchOutputTab("skill"));
 el.tabRag.addEventListener("click", () => switchOutputTab("rag"));
 el.downloadSkillBtn.addEventListener("click", () => {

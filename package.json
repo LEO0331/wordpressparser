@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js"
+    "check": "node --check server.js",
+    "profile:list": "node node_tools/version_manager.js list",
+    "profile:backup": "node node_tools/version_manager.js backup",
+    "profile:rollback": "node node_tools/version_manager.js rollback",
+    "profile:assemble": "node node_tools/skill_writer.js"
   },
   "engines": {
     "node": ">=18.0.0"

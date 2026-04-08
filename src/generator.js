@@ -1,108 +1,185 @@
 import { buildRagChunks, collectCorpusStats } from "./parser.js";
+import { buildSkillMarkdown } from "./skill_template.js";
 
-const PRESET_DEFS = {
-  default: {
-    name: "General Skill",
-    description: "Balanced tone + knowledge profile for broad AI usage.",
-    sections: [
-      "# Author Profile",
-      "## Core Voice",
-      "## Writing Patterns",
-      "## Topic Expertise",
-      "## Canonical Facts and Preferences",
-      "## Prompting Guardrails",
-      "## Response Examples"
-    ]
-  },
-  codex_skill: {
-    name: "Codex Skill",
-    description: "Strict format optimized for coding-assistant skill ingestion.",
-    sections: [
-      "# SKILL: Author Persona",
-      "## Trigger Conditions",
-      "## Output Contract",
-      "## Tone Rules",
-      "## Knowledge Priorities",
-      "## Do / Avoid",
-      "## Canonical Phrases",
-      "## Sample Responses"
-    ]
-  },
-  rag_profile: {
-    name: "RAG Profile",
-    description: "Strict profile optimized for retrieval + grounded synthesis.",
-    sections: [
-      "# Profile Card",
-      "## Retrieval Priorities",
-      "## Topic Map",
-      "## Evidence-Bound Claims",
-      "## Answer Style",
-      "## Safety and Uncertainty Policy",
-      "## Query Routing Hints"
-    ]
-  }
-};
+const LANGUAGE_WHITELIST = new Set(["en", "zh-TW", "auto"]);
 
-function resolvePreset(presetId) {
-  return PRESET_DEFS[presetId] ?? PRESET_DEFS.default;
+function normalizeLanguage(language) {
+  if (!language) return "auto";
+  if (LANGUAGE_WHITELIST.has(language)) return language;
+  const normalized = String(language).toLowerCase();
+  if (normalized.includes("traditional")) return "zh-TW";
+  if (normalized.startsWith("zh")) return "zh-TW";
+  if (normalized.startsWith("en")) return "en";
+  return "auto";
 }
 
-function selectSamples(items, maxCount = 12, maxCharsEach = 900) {
-  const candidates = [...items]
-    .sort((a, b) => b.content.length - a.content.length)
-    .slice(0, maxCount);
+function detectLanguageFromItems(items) {
+  const sample = items.slice(0, 20).map((x) => x.content).join(" ");
+  const cjk = (sample.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const latin = (sample.match(/[a-zA-Z]/g) ?? []).length;
+  return cjk > latin ? "zh-TW" : "en";
+}
 
-  return candidates.map((item, i) => ({
-    id: i + 1,
+function extractTopicCandidates(items, stats) {
+  const fromTags = [];
+  const seen = new Set();
+  for (const item of items) {
+    const tokens = [...(item.categories ?? []), ...(item.tags ?? [])];
+    for (const token of tokens) {
+      const value = String(token || "").trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fromTags.push(value);
+      if (fromTags.length >= 12) break;
+    }
+    if (fromTags.length >= 12) break;
+  }
+
+  const fromKeywords = stats.topKeywords.slice(0, 15).map((x) => x.word);
+  return [...fromTags, ...fromKeywords].slice(0, 12);
+}
+
+function toSentenceCount(text) {
+  const count = (text.match(/[.!?。！？]/g) ?? []).length;
+  return Math.max(count, 1);
+}
+
+function analyzePersona(items, language) {
+  const sample = items.slice(0, 40);
+  const lengths = sample.map((x) => x.content.length);
+  const avgLen = lengths.length
+    ? Math.round(lengths.reduce((sum, value) => sum + value, 0) / lengths.length)
+    : 0;
+
+  let sentenceChars = 0;
+  let sentenceCount = 0;
+  for (const item of sample) {
+    sentenceChars += item.content.length;
+    sentenceCount += toSentenceCount(item.content);
+  }
+  const avgSentenceLength = sentenceCount ? Math.round(sentenceChars / sentenceCount) : 0;
+
+  const usesNumberedRhythm = sample.some((x) => /\d+/.test(x.content));
+  const confidence = sample.some((x) => /(must|never|always|should|一定|必须|不要)/i.test(x.content))
+    ? "assertive"
+    : "balanced";
+
+  return {
+    voice: {
+      language,
+      tone: avgLen > 1200 ? "longform-analytical" : "concise-practical",
+      confidence,
+      pace: avgSentenceLength > 45 ? "measured" : "direct"
+    },
+    formatting: {
+      prefersStructuredLists: usesNumberedRhythm,
+      avgPostLengthChars: avgLen,
+      avgSentenceLengthChars: avgSentenceLength
+    },
+    reasoningPatterns: [
+      "state core claim",
+      "provide explanation or framework",
+      "end with practical takeaway"
+    ],
+    guardrails: [
+      "do not fabricate facts beyond source material",
+      "mark uncertainty when evidence is weak",
+      "keep output in English or Traditional Chinese"
+    ]
+  };
+}
+
+function analyzeKnowledge(items, stats) {
+  const topics = extractTopicCandidates(items, stats);
+  const evidencePosts = items.slice(0, 12).map((item) => ({
     title: item.title,
     date: item.date,
-    text: item.content.slice(0, maxCharsEach)
+    url: item.url
   }));
+
+  return {
+    corpus: {
+      itemCount: stats.count,
+      dateRange: {
+        start: stats.minDate,
+        end: stats.maxDate
+      },
+      avgChars: stats.avgChars
+    },
+    coreTopics: topics,
+    canonicalClaims: [
+      "derive recurring claims from source posts",
+      "prefer explicit statements over inferred assumptions",
+      "bind claims to evidence posts when possible"
+    ],
+    domainTerms: stats.topKeywords.slice(0, 30).map((x) => x.word),
+    evidencePosts
+  };
 }
 
-function buildPrompt({ items, language = "auto", preset = "default" }) {
-  const stats = collectCorpusStats(items);
-  const samples = selectSamples(items);
-  const topicLine = stats.topKeywords.slice(0, 20).map((t) => t.word).join(", ");
-  const presetDef = resolvePreset(preset);
-  const languageRule =
-    language === "auto"
-      ? "Write in the same dominant language style found in the source material."
-      : `Write in ${language}.`;
+function buildKnowledgeMarkdown(analysis, language) {
+  const topicLine = analysis.coreTopics.length ? analysis.coreTopics.join(", ") : "none";
+  const terms = analysis.domainTerms.slice(0, 20).join(", ");
+  const dateStart = analysis.corpus.dateRange.start ?? "unknown";
+  const dateEnd = analysis.corpus.dateRange.end ?? "unknown";
 
-  return `
-You are creating a reusable skill profile from one person's WordPress writings.
+  const intro =
+    language === "zh-TW"
+      ? "此段为从 WordPress 语料中抽取的知识侧重点。"
+      : "This section captures knowledge priorities distilled from WordPress sources.";
 
-Goal:
-- Produce a practical SKILL.md artifact for AI systems to emulate tone, style, and knowledge.
-- Keep it concise, structured, and ready to use.
-- Follow this strict preset: ${presetDef.name} (${presetDef.description})
+  return `### Overview
+${intro}
 
-Rules:
-- ${languageRule}
-- Do not fabricate facts. If uncertain, write a cautious note.
-- Include examples that are short and representative.
-- Output only Markdown.
+### Corpus
+- Item count: ${analysis.corpus.itemCount}
+- Average length (chars): ${analysis.corpus.avgChars}
+- Date range: ${dateStart} to ${dateEnd}
 
-Required markdown sections in this exact order:
-${presetDef.sections.map((s, i) => `${i + 1}) ${s}`).join("\n")}
+### Core Topics
+${topicLine}
 
-Corpus stats:
-- total_posts: ${stats.count}
-- avg_chars: ${stats.avgChars}
-- date_range: ${stats.minDate ?? "unknown"} to ${stats.maxDate ?? "unknown"}
-- top_keywords: ${topicLine || "unknown"}
+### Canonical Claims
+${analysis.canonicalClaims.map((x) => `- ${x}`).join("\n")}
 
-Representative excerpts:
-${samples
-  .map(
-    (sample) =>
-      `### Sample ${sample.id}\n` +
-      `title: ${sample.title}\n` +
-      `date: ${sample.date ?? "unknown"}\n` +
-      `text: ${sample.text}\n`
-  )
+### Domain Terms
+${terms || "none"}
+
+### Evidence Posts
+${analysis.evidencePosts
+  .slice(0, 10)
+  .map((x) => `- ${x.title} (${x.date ?? "unknown"}) ${x.url ?? ""}`.trim())
   .join("\n")}
+`;
+}
+
+function buildPersonaMarkdown(analysis, language) {
+  const intro =
+    language === "zh-TW"
+      ? "此段为写作语气、表达风格与结构偏好。"
+      : "This section captures writing tone, style, and structure preferences.";
+
+  return `### Overview
+${intro}
+
+### Voice
+- Language: ${analysis.voice.language}
+- Tone: ${analysis.voice.tone}
+- Confidence: ${analysis.voice.confidence}
+- Pace: ${analysis.voice.pace}
+
+### Formatting
+- Structured lists preferred: ${analysis.formatting.prefersStructuredLists}
+- Avg post length (chars): ${analysis.formatting.avgPostLengthChars}
+- Avg sentence length (chars): ${analysis.formatting.avgSentenceLengthChars}
+
+### Reasoning Patterns
+${analysis.reasoningPatterns.map((x) => `- ${x}`).join("\n")}
+
+### Guardrails
+${analysis.guardrails.map((x) => `- ${x}`).join("\n")}
 `;
 }
 
@@ -113,7 +190,6 @@ function extractResponseText(responseJson) {
 
   const output = responseJson?.output;
   if (!Array.isArray(output)) return "";
-
   const lines = [];
   for (const item of output) {
     const content = item?.content;
@@ -128,7 +204,6 @@ function extractResponseText(responseJson) {
 async function callModel(prompt) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
-
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -138,149 +213,170 @@ async function callModel(prompt) {
     },
     body: JSON.stringify({
       model,
-      temperature: 0.3,
+      temperature: 0.2,
       input: prompt
     })
   });
-
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Model request failed (${response.status}): ${errorText}`);
   }
-
   const body = await response.json();
   return extractResponseText(body);
 }
 
-function fallbackSkill(items, language = "auto", preset = "default") {
-  const stats = collectCorpusStats(items);
-  const top = stats.topKeywords.slice(0, 15).map((x) => x.word);
-  const sampleTitles = items.slice(0, 6).map((x) => x.title).filter(Boolean);
-  const lang = language === "auto" ? "source language" : language;
-  const presetDef = resolvePreset(preset);
+function buildAiPrompt({ slug, name, knowledgeMarkdown, personaMarkdown, language }) {
+  return `
+Build a final skill.md for this author profile.
+Rules:
+- Output in ${language}.
+- Keep markdown concise and precise.
+- Do not add unsupported facts.
+- Keep sections: frontmatter, title, PART A, PART B, execution rules.
 
-  if (preset === "codex_skill") {
-    return `# SKILL: Author Persona
-Derived from ${stats.count} posts in ${lang}.
+Slug: ${slug}
+Name: ${name}
 
-## Trigger Conditions
-- Use when user asks for writing in this author's style or asks domain advice aligned with source topics.
+Knowledge section draft:
+${knowledgeMarkdown}
 
-## Output Contract
-- Keep responses concise-first, then expand with practical detail.
-- Preserve source language dominance unless user asks otherwise.
-
-## Tone Rules
-- Reflective but direct, with concrete action points.
-- Prefer structured lists and explicit guardrails when discussing decisions.
-
-## Knowledge Priorities
-- Focus topics: ${top.join(", ") || "general personal knowledge"}.
-- Time range: ${stats.minDate ?? "unknown"} to ${stats.maxDate ?? "unknown"}.
-
-## Do / Avoid
-- Do ground claims in source patterns and use cautious wording for uncertain facts.
-- Avoid invented credentials, unverifiable numbers, or overconfident claims.
-
-## Canonical Phrases
-- "Give the practical version first."
-- "Define risk boundaries before optimizing return."
-
-## Sample Responses
-- Short: "Start from constraints, then give one recommended path."
-- Long: "State principle, show tradeoff, end with concrete next step."
-`;
-  }
-
-  if (preset === "rag_profile") {
-    return `# Profile Card
-Corpus size: ${stats.count} posts. Language: ${lang}.
-
-## Retrieval Priorities
-- Prefer recent posts first, then high-overlap topic matches.
-- Use title/date/url metadata to keep responses grounded.
-
-## Topic Map
-- Primary terms: ${top.join(", ") || "general topics"}.
-
-## Evidence-Bound Claims
-- Treat extracted chunks as the only source of truth.
-- If retrieval confidence is low, ask for clarification or mark uncertainty.
-
-## Answer Style
-- Lead with concise conclusion, then evidence-backed explanation.
-
-## Safety and Uncertainty Policy
-- Never fabricate biographical or financial facts beyond retrieved evidence.
-
-## Query Routing Hints
-- For tone imitation tasks, prioritize high-signal longform posts.
-- For factual Q&A, prioritize chunks with explicit numbers and dates.
-`;
-  }
-
-  return `${presetDef.sections[0]}
-Auto-generated fallback profile (${lang}) from ${stats.count} posts.
-
-${presetDef.sections[1]}
-- Uses a reflective, personal narrative tone mixed with practical observations.
-- Prefers concrete examples over abstract claims.
-
-${presetDef.sections[2]}
-- Typical post length is around ${stats.avgChars} characters.
-- Often organized around lived experience, then distilled into takeaways.
-- Frequent topics include: ${top.join(", ") || "general personal topics"}.
-
-${presetDef.sections[3]}
-- Primary knowledge areas are inferred from recurring keywords and post themes.
-- Use retrieved chunks for factual grounding before making specific claims.
-
-${presetDef.sections[4]}
-- Date range in corpus: ${stats.minDate ?? "unknown"} to ${stats.maxDate ?? "unknown"}.
-- Representative post titles: ${sampleTitles.join(" | ") || "n/a"}.
-
-${presetDef.sections[5]}
-- Match sentence rhythm and level of directness from source.
-- Avoid inventing biographies or credentials not stated in source content.
-- Cite uncertainty clearly when context is missing.
-
-${presetDef.sections[6]}
-### Short answer style
-"Here is the practical version first, then nuance if needed."
-
-### Long answer style
-"Start from a personal observation, connect to broader principle, close with actionable takeaway."
+Persona section draft:
+${personaMarkdown}
 `;
 }
 
-export async function generateArtifacts(items, options = {}) {
-  const language = options.language || "auto";
-  const preset = options.preset || "default";
-  const prompt = buildPrompt({ items, language, preset });
+export function analyzeCorpus(items, options = {}) {
+  const stats = collectCorpusStats(items);
+  const requestedLanguage = normalizeLanguage(options.language);
+  const resolvedLanguage =
+    requestedLanguage === "auto" ? detectLanguageFromItems(items) : requestedLanguage;
 
-  let skillMarkdown;
-  let aiUsed = false;
-  try {
-    const modelOutput = await callModel(prompt);
-    if (modelOutput) {
-      skillMarkdown = modelOutput;
-      aiUsed = true;
-    } else {
-      skillMarkdown = fallbackSkill(items, language, preset);
+  const knowledgeAnalysis = analyzeKnowledge(items, stats);
+  const personaAnalysis = analyzePersona(items, resolvedLanguage);
+
+  return {
+    knowledgeAnalysis,
+    personaAnalysis,
+    metadata: {
+      itemCount: items.length,
+      language: resolvedLanguage,
+      generatedAt: new Date().toISOString()
     }
-  } catch (error) {
-    skillMarkdown = fallbackSkill(items, language, preset);
+  };
+}
+
+export async function buildProfileArtifacts(payload) {
+  const { slug, name, items, options = {}, corrections = [] } = payload;
+  const analysis = analyzeCorpus(items, options);
+  const modeRequested = options.mode === "ai" ? "ai" : "parser";
+  const aiEnabled = Boolean(process.env.OPENAI_API_KEY);
+  const modeUsed = modeRequested === "ai" && aiEnabled ? "ai" : "parser";
+
+  const knowledgeMarkdown = buildKnowledgeMarkdown(
+    analysis.knowledgeAnalysis,
+    analysis.metadata.language
+  );
+  const personaMarkdown = buildPersonaMarkdown(
+    analysis.personaAnalysis,
+    analysis.metadata.language
+  );
+
+  let skillMarkdown = buildSkillMarkdown({
+    slug,
+    name,
+    language: analysis.metadata.language,
+    knowledgeType: "WordPress knowledge profile",
+    primaryTopics: analysis.knowledgeAnalysis.coreTopics.slice(0, 3),
+    optionalIdentity: "",
+    descriptionParts: [
+      name,
+      analysis.knowledgeAnalysis.coreTopics[0] ?? "general knowledge",
+      analysis.personaAnalysis.voice.tone
+    ],
+    knowledgeMarkdown,
+    personaMarkdown
+  });
+
+  let aiUsed = false;
+  if (modeUsed === "ai") {
+    try {
+      const prompt = buildAiPrompt({
+        slug,
+        name,
+        knowledgeMarkdown,
+        personaMarkdown,
+        language: analysis.metadata.language
+      });
+      const aiSkill = await callModel(prompt);
+      if (aiSkill) {
+        skillMarkdown = aiSkill;
+        aiUsed = true;
+      }
+    } catch {
+      aiUsed = false;
+    }
   }
 
-  const rag = buildRagChunks(items);
+  const rag = buildRagChunks(items).map((chunk) => ({
+    ...chunk,
+    metadata: {
+      ...chunk.metadata,
+      slug,
+      topic_hint: analysis.knowledgeAnalysis.coreTopics[0] ?? null
+    }
+  }));
+
+  const meta = {
+    name,
+    slug,
+    language: analysis.metadata.language,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    version: "v1",
+    mode: modeUsed,
+    source_types: options.sourceTypes ?? ["wordpress_json_or_url"],
+    source_count: items.length,
+    ai_enabled: aiEnabled,
+    ai_used: aiUsed,
+    knowledge_topics: analysis.knowledgeAnalysis.coreTopics.slice(0, 10),
+    tags: {
+      tone: [analysis.personaAnalysis.voice.tone, analysis.personaAnalysis.voice.pace],
+      format: [
+        analysis.personaAnalysis.formatting.prefersStructuredLists
+          ? "structured-lists"
+          : "narrative",
+        "concise-first"
+      ]
+    },
+    corrections_count: corrections.length
+  };
+
   return {
+    meta,
+    knowledgeAnalysis: analysis.knowledgeAnalysis,
+    personaAnalysis: analysis.personaAnalysis,
+    knowledgeMarkdown,
+    personaMarkdown,
     skillMarkdown,
     rag,
     metadata: {
+      modeRequested,
+      modeUsed,
       aiUsed,
-      preset,
       itemCount: items.length,
       generatedAt: new Date().toISOString()
     }
   };
+}
+
+// Backward-compatible endpoint behavior.
+export async function generateArtifacts(items, options = {}) {
+  const slug = options.slug || "author-profile";
+  const name = options.name || "Author";
+  return buildProfileArtifacts({
+    slug,
+    name,
+    items,
+    options
+  });
 }
