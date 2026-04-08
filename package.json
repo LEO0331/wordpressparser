@@ -8,6 +8,7 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js",
+    "test:smoke": "node scripts/api-smoke.mjs",
     "profile:list": "node node_tools/version_manager.js list",
     "profile:backup": "node node_tools/version_manager.js backup",
     "profile:rollback": "node node_tools/version_manager.js rollback",
@@ -17,6 +18,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@vercel/blob": "^0.27.0",
     "express": "^4.21.2"
   }
 }

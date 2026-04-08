@@ -1,10 +1,16 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import express from "express";
 import { normalizeWordPressData } from "./src/parser.js";
 import { analyzeCorpus, buildProfileArtifacts, generateArtifacts } from "./src/generator.js";
-import { listProfiles, profileRoot, readProfile, saveProfile, toSlug } from "./src/profile_store.js";
-import { backupProfile, listVersions, rollbackProfile } from "./node_tools/version_manager.js";
+import {
+  applyProfileCorrection,
+  listProfiles,
+  listProfileVersions,
+  readNormalizedItems,
+  readProfile,
+  rollbackProfileStore,
+  saveProfile,
+  toSlug
+} from "./src/profile_store.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -56,7 +62,6 @@ async function fetchWpComItems(host, postType = "post") {
       if (res.status === 400 || res.status === 404) break;
       throw new Error(`WordPress.com API request failed (${res.status})`);
     }
-
     const body = await res.json();
     const posts = Array.isArray(body?.posts) ? body.posts : [];
     if (posts.length === 0) break;
@@ -94,16 +99,11 @@ async function fetchWordPressByUrl(inputUrl) {
   });
 }
 
-async function readNormalizedRaw(slug) {
-  const file = path.join(profileRoot(), slug, "raw", "normalized.json");
-  const raw = await fs.readFile(file, "utf8");
-  return JSON.parse(raw);
-}
-
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     aiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
     timestamp: new Date().toISOString()
   });
 });
@@ -224,7 +224,7 @@ app.get("/api/profiles", async (_req, res) => {
 app.get("/api/profiles/:slug", async (req, res) => {
   try {
     const profile = await readProfile(req.params.slug);
-    const versions = await listVersions(profile.slug, profileRoot());
+    const versions = await listProfileVersions(profile.slug);
     res.json({
       ...profile,
       versions
@@ -242,23 +242,17 @@ app.post("/api/profiles/:slug/update", async (req, res) => {
 
     let baseItems = [];
     try {
-      baseItems = await readNormalizedRaw(slug);
+      baseItems = await readNormalizedItems(slug);
     } catch {
       baseItems = [];
     }
 
-    const merged = [
-      ...baseItems,
-      ...(Array.isArray(incomingItems) ? incomingItems : [])
-    ];
-
+    const merged = [...baseItems, ...(Array.isArray(incomingItems) ? incomingItems : [])];
     if (!merged.length) {
       return res.status(400).json({ error: "No profile data to update." });
     }
 
     const prior = await readProfile(slug);
-    await backupProfile(slug, profileRoot());
-
     const artifacts = await buildProfileArtifacts({
       slug,
       name: prior.meta.name || slug,
@@ -294,58 +288,8 @@ app.post("/api/profiles/:slug/correct", async (req, res) => {
     const correction = String(req.body?.correction || "").trim();
     const scope = String(req.body?.scope || "persona");
     if (!correction) return res.status(400).json({ error: "Missing correction text." });
-
-    const profile = await readProfile(slug);
-    await backupProfile(slug, profileRoot());
-
-    const targetFile = scope === "knowledge" ? "knowledge.md" : "persona.md";
-    const targetPath = path.join(profile.profileDir, targetFile);
-    const now = new Date().toISOString();
-    const appendText = `\n\n## Correction Log\n- ${now}: ${correction}\n`;
-    await fs.appendFile(targetPath, appendText, "utf8");
-
-    const updatedTarget = await fs.readFile(targetPath, "utf8");
-    const updatedKnowledge = scope === "knowledge" ? updatedTarget : profile.knowledgeMarkdown;
-    const updatedPersona = scope === "persona" ? updatedTarget : profile.personaMarkdown;
-
-    const skillMarkdown = `---
-name: knowledge-${slug}
-description: "${profile.meta.name}, corrected profile"
-user-invocable: true
----
-
-# ${profile.meta.name}
-
-${profile.meta.language} · WordPress knowledge profile
-
----
-
-## PART A: Knowledge
-
-${updatedKnowledge}
-
----
-
-## PART B: Persona
-
-${updatedPersona}
-`;
-
-    const nextMeta = {
-      ...profile.meta,
-      updated_at: now,
-      corrections_count: Number(profile.meta.corrections_count || 0) + 1
-    };
-
-    await fs.writeFile(path.join(profile.profileDir, "meta.json"), JSON.stringify(nextMeta, null, 2), "utf8");
-    await fs.writeFile(path.join(profile.profileDir, "skill.md"), skillMarkdown, "utf8");
-
-    res.json({
-      slug,
-      scope,
-      correction,
-      corrections_count: nextMeta.corrections_count
-    });
+    const result = await applyProfileCorrection(slug, scope, correction);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -356,14 +300,13 @@ app.post("/api/profiles/:slug/rollback", async (req, res) => {
     const slug = toSlug(req.params.slug);
     const version = req.body?.version;
     if (!version) return res.status(400).json({ error: "Missing version." });
-    const result = await rollbackProfile(slug, version, profileRoot());
+    const result = await rollbackProfileStore(slug, version);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Backward compatibility for existing UI.
 app.post("/api/generate", async (req, res) => {
   try {
     const items = req.body?.items;

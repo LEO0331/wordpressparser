@@ -43,6 +43,24 @@ Open `http://localhost:3000`.
 - `OPENAI_API_KEY` (optional)
 - `OPENAI_MODEL` (optional, default `gpt-4.1-mini`)
 - `PORT` (optional, default `3000`)
+- `BLOB_READ_WRITE_TOKEN` (optional, required for persistent storage on Vercel)
+
+Storage behavior:
+- If `BLOB_READ_WRITE_TOKEN` is present, profile data is saved to Vercel Blob.
+- Otherwise, profile data is saved to local filesystem under `profiles/{slug}/`.
+
+## Vercel deployment
+
+This repo includes [vercel.json](C:\Users\LeoLi\Documents\wordpressparser\vercel.json) tuned for Express.
+
+Recommended project settings:
+- Framework Preset: Other
+- Root Directory: repository root
+- Production Branch: `main`
+- Environment Variables:
+  - `OPENAI_API_KEY` (optional)
+  - `OPENAI_MODEL` (optional)
+  - `BLOB_READ_WRITE_TOKEN` (required if you use profile save/update/rollback in production)
 
 ## API
 
@@ -75,3 +93,11 @@ Open `http://localhost:3000`.
 ## Reference design assets
 
 `create-author-skill/` contains skill and prompt templates aligned with this pipeline design.
+
+## CI/CD
+
+GitHub Actions pipeline is included at [ci.yml](C:\Users\LeoLi\Documents\wordpressparser\.github\workflows\ci.yml):
+- install dependencies
+- run static check
+- boot server
+- run API smoke test (`npm run test:smoke`)
