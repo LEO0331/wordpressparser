@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WordPress Persona Parser</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel input-panel">
+        <h1>WordPress Persona Parser</h1>
+        <p class="subtitle">
+          Parse WordPress JSON or URL, then generate <code>skill.md</code> and optional RAG chunks.
+        </p>
+
+        <div class="source-switch">
+          <button id="sourceJsonBtn" class="chip active" type="button">Use JSON</button>
+          <button id="sourceUrlBtn" class="chip" type="button">Use URL</button>
+        </div>
+
+        <div id="jsonSource" class="source-block">
+          <label for="jsonFile">WordPress JSON file</label>
+          <input id="jsonFile" type="file" accept=".json,application/json" />
+          <label for="jsonText" class="mt">Or paste raw JSON</label>
+          <textarea id="jsonText" rows="10" placeholder='{"posts":[...]}'></textarea>
+          <p class="hint">Supports common exporter structures such as <code>posts</code>, <code>items</code>, and arrays.</p>
+        </div>
+
+        <div id="urlSource" class="source-block hidden">
+          <label for="wpUrl">WordPress URL</label>
+          <input id="wpUrl" type="url" placeholder="https://leolicheng.wordpress.com/" />
+          <p class="hint">The server fetches posts/pages via WordPress REST APIs.</p>
+        </div>
+
+        <div class="grid">
+          <div>
+            <label for="languageMode">Output language</label>
+            <select id="languageMode">
+              <option value="auto">Match source (auto)</option>
+              <option value="English">English</option>
+              <option value="Traditional Chinese">Traditional Chinese</option>
+            </select>
+          </div>
+          <div>
+            <label for="outputMode">Output mode</label>
+            <select id="outputMode">
+              <option value="skill">Skill.md only</option>
+              <option value="both">Skill.md + RAG</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label for="presetMode">Skill preset template</label>
+          <select id="presetMode">
+            <option value="default">General Skill</option>
+            <option value="codex_skill">Codex Skill (strict)</option>
+            <option value="rag_profile">RAG Profile (strict)</option>
+          </select>
+        </div>
+
+        <div class="actions">
+          <button id="parseBtn" type="button">1. Parse Source</button>
+          <button id="generateBtn" type="button" disabled>2. Generate Artifacts</button>
+        </div>
+
+        <div id="status" class="status">Waiting for input.</div>
+        <div id="stats" class="stats hidden"></div>
+      </section>
+
+      <section class="panel output-panel">
+        <div class="toolbar">
+          <button id="tabSkill" class="chip active" type="button">skill.md</button>
+          <button id="tabRag" class="chip" type="button">rag.json</button>
+          <button id="downloadSkillBtn" type="button" disabled>Download skill.md</button>
+          <button id="downloadRagBtn" type="button" disabled>Download rag.json</button>
+        </div>
+        <pre id="output" class="output">No output yet.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
