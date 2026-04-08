@@ -1,4 +1,6 @@
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeWordPressData } from "./src/parser.js";
 import { analyzeCorpus, buildProfileArtifacts, generateArtifacts } from "./src/generator.js";
 import {
@@ -14,9 +16,12 @@ import {
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicDir = path.join(__dirname, "public");
 
 app.use(express.json({ limit: "20mb" }));
-app.use(express.static("public"));
+app.use(express.static(publicDir));
 
 function sanitizeSiteUrl(input) {
   const url = new URL(input);
@@ -106,6 +111,10 @@ app.get("/api/health", (_req, res) => {
     blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
     timestamp: new Date().toISOString()
   });
+});
+
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
 });
 
 app.post("/api/normalize", (req, res) => {

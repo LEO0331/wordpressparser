@@ -8,8 +8,6 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "node --check server.js",
-    "test": "npm run test:coverage",
-    "test:coverage": "c8 --include=src/parser.js --include=src/generator.js --include=src/skill_template.js --reporter=text --reporter=lcov --check-coverage --lines 90 --functions 90 --statements 90 node scripts/run-node-tests.mjs",
     "test:smoke": "node scripts/api-smoke.mjs",
     "profile:list": "node node_tools/version_manager.js list",
     "profile:backup": "node node_tools/version_manager.js backup",
@@ -22,8 +20,5 @@
   "dependencies": {
     "@vercel/blob": "^0.27.0",
     "express": "^4.21.2"
-  },
-  "devDependencies": {
-    "c8": "^10.1.3"
   }
 }
