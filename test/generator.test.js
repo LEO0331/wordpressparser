@@ -91,3 +91,23 @@ test("generateArtifacts remains backward compatible", async () => {
 
   if (oldKey) process.env.OPENAI_API_KEY = oldKey;
 });
+
+test("buildProfileArtifacts renders Traditional Chinese sections when zh-TW is selected", async () => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+
+  const artifacts = await buildProfileArtifacts({
+    slug: "leo-zh",
+    name: "Leo 中文",
+    items: sampleItems,
+    options: { mode: "parser", language: "zh-TW" }
+  });
+
+  assert.equal(artifacts.metadata.modeUsed, "parser");
+  assert.ok(artifacts.skillMarkdown.includes("## PART A: 知識庫"));
+  assert.ok(artifacts.skillMarkdown.includes("## PART B: 人設風格"));
+  assert.ok(artifacts.knowledgeMarkdown.includes("### 核心主題"));
+  assert.ok(artifacts.personaMarkdown.includes("### 語氣與風格"));
+
+  if (oldKey) process.env.OPENAI_API_KEY = oldKey;
+});

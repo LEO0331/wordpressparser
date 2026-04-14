@@ -35,8 +35,21 @@ const el = {
   downloadRagBtn: document.getElementById("downloadRagBtn")
 };
 
-function setStatus(message, isError = false) {
-  el.status.textContent = message;
+function setStatus(message, options = {}) {
+  const normalized =
+    typeof options === "boolean" ? { isError: options, isLoading: false } : options;
+  const { isError = false, isLoading = false } = normalized;
+  el.status.classList.toggle("is-loading", isLoading);
+  el.status.innerHTML = "";
+  if (isLoading) {
+    const spinner = document.createElement("span");
+    spinner.className = "status-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    el.status.appendChild(spinner);
+  }
+  const text = document.createElement("span");
+  text.textContent = message;
+  el.status.appendChild(text);
   el.status.style.color = isError ? "#8f2f2f" : "#2e2a21";
 }
 
@@ -132,7 +145,7 @@ function downloadText(filename, content) {
 
 async function handleParse() {
   try {
-    setStatus("Parsing source...");
+    setStatus("Parsing source...", { isLoading: true });
     const parsed = state.sourceMode === "json" ? await parseFromJson() : await parseFromUrl();
     state.items = parsed.items || [];
     if (!state.items.length) {
@@ -143,14 +156,14 @@ async function handleParse() {
     el.saveBtn.disabled = true;
     setStatus(`Parsed ${state.items.length} items. Ready to generate.`);
   } catch (error) {
-    setStatus(error.message, true);
+    setStatus(error.message, { isError: true });
   }
 }
 
 async function handleGenerate() {
   try {
     if (!state.items.length) throw new Error("Parse data first.");
-    setStatus("Generating artifacts...");
+    setStatus("Generating artifacts...", { isLoading: true });
     const mode = el.outputMode.value;
     const slug = el.profileSlug.value.trim() || "author-profile";
     const name = el.profileName.value.trim() || "Author";
@@ -180,7 +193,7 @@ async function handleGenerate() {
     const engine = response.metadata?.aiUsed ? "AI model" : "parser mode";
     setStatus(`Generation done using ${engine}. Effective mode: ${response.metadata?.modeUsed || "parser"}.`);
   } catch (error) {
-    setStatus(error.message, true);
+    setStatus(error.message, { isError: true });
   }
 }
 
@@ -189,7 +202,7 @@ async function handleSave() {
     if (!state.items.length || !state.skillMarkdown) {
       throw new Error("Generate artifacts before saving.");
     }
-    setStatus("Saving profile...");
+    setStatus("Saving profile...", { isLoading: true });
     const slug = el.profileSlug.value.trim() || "author-profile";
     const name = el.profileName.value.trim() || "Author";
 
@@ -207,7 +220,7 @@ async function handleSave() {
 
     setStatus(`Saved profile '${response.storage?.slug}' to ${response.storage?.profileDir}.`);
   } catch (error) {
-    setStatus(error.message, true);
+    setStatus(error.message, { isError: true });
   }
 }
 

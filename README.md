@@ -44,6 +44,8 @@ Open `http://localhost:3000`.
 - `OPENAI_MODEL` (optional, default `gpt-4.1-mini`)
 - `PORT` (optional, default `3000`)
 - `BLOB_READ_WRITE_TOKEN` (optional, required for persistent storage on Vercel)
+- `WP_BASE_URL`, `WP_USERNAME`, `WP_APP_PASSWORD` (optional, for MCP sidecar)
+- `WP_API_VERSION` (optional, default `v2`, for MCP sidecar)
 
 Storage behavior:
 - If `BLOB_READ_WRITE_TOKEN` is present, profile data is saved to Vercel Blob.
@@ -89,6 +91,16 @@ Recommended project settings:
 - `node node_tools/version_manager.js list <slug>`
 - `node node_tools/version_manager.js rollback <slug> <version>`
 - `node node_tools/skill_writer.js <slug>`
+
+## WordPress MCP sidecar
+
+You can run an independent MCP server without affecting existing API/deployment:
+
+```bash
+npm run mcp:wp
+```
+
+See setup and tool docs in `docs/mcp-wordpress.md`.
 
 ## Reference design assets
 

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "wordpress-sidecar": {
+      "command": "node",
+      "args": ["/absolute/path/to/wordpressparser/mcp/server.js"],
+      "env": {
+        "WP_BASE_URL": "https://your-site.com",
+        "WP_USERNAME": "your-username",
+        "WP_APP_PASSWORD": "xxxx xxxx xxxx xxxx xxxx xxxx",
+        "WP_API_VERSION": "v2",
+        "WP_TIMEOUT_MS": "15000"
+      }
+    }
+  }
+}

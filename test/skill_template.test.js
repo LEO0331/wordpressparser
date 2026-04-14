@@ -16,8 +16,10 @@ test("buildSkillMarkdown renders frontmatter and key sections", () => {
   });
 
   assert.ok(md.includes("name: knowledge-leo"));
+  assert.ok(md.includes("## Profile Snapshot"));
   assert.ok(md.includes("## PART A: Knowledge"));
   assert.ok(md.includes("knowledge content"));
   assert.ok(md.includes("## PART B: Persona"));
   assert.ok(md.includes("persona content"));
+  assert.ok(md.includes("## Response Checklist"));
 });

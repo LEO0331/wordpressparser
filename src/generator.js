@@ -2,6 +2,108 @@ import { buildRagChunks, collectCorpusStats } from "./parser.js";
 import { buildSkillMarkdown } from "./skill_template.js";
 
 const LANGUAGE_WHITELIST = new Set(["en", "zh-TW", "auto"]);
+const LOCALE = {
+  en: {
+    knowledgeIntro: "This section captures knowledge priorities distilled from WordPress sources.",
+    personaIntro: "This section captures writing tone, style, and structure preferences.",
+    headingOverview: "### Overview",
+    headingCorpus: "### Corpus",
+    headingTopics: "### Core Topics",
+    headingClaims: "### Canonical Claims",
+    headingTerms: "### Domain Terms",
+    headingEvidence: "### Evidence Posts",
+    headingVoice: "### Voice",
+    headingFormatting: "### Formatting",
+    headingPatterns: "### Reasoning Patterns",
+    headingGuardrails: "### Guardrails",
+    labelItemCount: "Item count",
+    labelAvgLength: "Average length (chars)",
+    labelDateRange: "Date range",
+    labelLanguage: "Language",
+    labelTone: "Tone",
+    labelConfidence: "Confidence",
+    labelPace: "Pace",
+    labelStructuredLists: "Structured lists preferred",
+    labelAvgPostLength: "Avg post length (chars)",
+    labelAvgSentenceLength: "Avg sentence length (chars)",
+    unknown: "unknown",
+    none: "none",
+    dateConnector: "to",
+    canonicalClaims: [
+      "derive recurring claims from source posts",
+      "prefer explicit statements over inferred assumptions",
+      "bind claims to evidence posts when possible"
+    ],
+    reasoningPatterns: [
+      "state core claim",
+      "provide explanation or framework",
+      "end with practical takeaway"
+    ],
+    guardrails: [
+      "do not fabricate facts beyond source material",
+      "mark uncertainty when evidence is weak",
+      "keep output in English or Traditional Chinese"
+    ],
+    voiceMap: {
+      "longform-analytical": "longform-analytical",
+      "concise-practical": "concise-practical",
+      assertive: "assertive",
+      balanced: "balanced",
+      measured: "measured",
+      direct: "direct"
+    }
+  },
+  "zh-TW": {
+    knowledgeIntro: "此段整理自 WordPress 語料，聚焦可重用的知識重點。",
+    personaIntro: "此段整理作者語氣、風格與結構偏好。",
+    headingOverview: "### 概覽",
+    headingCorpus: "### 語料概況",
+    headingTopics: "### 核心主題",
+    headingClaims: "### 關鍵主張",
+    headingTerms: "### 領域詞彙",
+    headingEvidence: "### 證據文章",
+    headingVoice: "### 語氣與風格",
+    headingFormatting: "### 格式偏好",
+    headingPatterns: "### 推理模式",
+    headingGuardrails: "### 輸出守則",
+    labelItemCount: "條目數",
+    labelAvgLength: "平均長度（字元）",
+    labelDateRange: "日期範圍",
+    labelLanguage: "語言",
+    labelTone: "語氣",
+    labelConfidence: "立場強度",
+    labelPace: "節奏",
+    labelStructuredLists: "偏好條列結構",
+    labelAvgPostLength: "平均文章長度（字元）",
+    labelAvgSentenceLength: "平均句長（字元）",
+    unknown: "未知",
+    none: "無",
+    dateConnector: "至",
+    canonicalClaims: [
+      "從原始文章歸納重複出現的核心主張",
+      "優先採用明確敘述，避免過度推論",
+      "可行時將主張綁定到具體證據文章"
+    ],
+    reasoningPatterns: [
+      "先提出核心觀點",
+      "補上脈絡、框架或推導過程",
+      "最後收斂為可執行的建議"
+    ],
+    guardrails: [
+      "不得捏造超出來源語料的事實",
+      "當證據不足時必須清楚標示不確定性",
+      "輸出語言僅限英文或繁體中文"
+    ],
+    voiceMap: {
+      "longform-analytical": "長篇分析",
+      "concise-practical": "精簡務實",
+      assertive: "明確",
+      balanced: "平衡",
+      measured: "穩健",
+      direct: "直接"
+    }
+  }
+};
 
 function normalizeLanguage(language) {
   if (!language) return "auto";
@@ -65,6 +167,7 @@ function analyzePersona(items, language) {
   const confidence = sample.some((x) => /(must|never|always|should|一定|必须|不要)/i.test(x.content))
     ? "assertive"
     : "balanced";
+  const locale = LOCALE[language] ?? LOCALE.en;
 
   return {
     voice: {
@@ -78,20 +181,13 @@ function analyzePersona(items, language) {
       avgPostLengthChars: avgLen,
       avgSentenceLengthChars: avgSentenceLength
     },
-    reasoningPatterns: [
-      "state core claim",
-      "provide explanation or framework",
-      "end with practical takeaway"
-    ],
-    guardrails: [
-      "do not fabricate facts beyond source material",
-      "mark uncertainty when evidence is weak",
-      "keep output in English or Traditional Chinese"
-    ]
+    reasoningPatterns: locale.reasoningPatterns,
+    guardrails: locale.guardrails
   };
 }
 
-function analyzeKnowledge(items, stats) {
+function analyzeKnowledge(items, stats, language) {
+  const locale = LOCALE[language] ?? LOCALE.en;
   const topics = extractTopicCandidates(items, stats);
   const evidencePosts = items.slice(0, 12).map((item) => ({
     title: item.title,
@@ -109,76 +205,73 @@ function analyzeKnowledge(items, stats) {
       avgChars: stats.avgChars
     },
     coreTopics: topics,
-    canonicalClaims: [
-      "derive recurring claims from source posts",
-      "prefer explicit statements over inferred assumptions",
-      "bind claims to evidence posts when possible"
-    ],
+    canonicalClaims: locale.canonicalClaims,
     domainTerms: stats.topKeywords.slice(0, 30).map((x) => x.word),
     evidencePosts
   };
 }
 
 function buildKnowledgeMarkdown(analysis, language) {
-  const topicLine = analysis.coreTopics.length ? analysis.coreTopics.join(", ") : "none";
+  const locale = LOCALE[language] ?? LOCALE.en;
+  const topicLine = analysis.coreTopics.length ? analysis.coreTopics.join(", ") : locale.none;
   const terms = analysis.domainTerms.slice(0, 20).join(", ");
-  const dateStart = analysis.corpus.dateRange.start ?? "unknown";
-  const dateEnd = analysis.corpus.dateRange.end ?? "unknown";
+  const dateStart = analysis.corpus.dateRange.start ?? locale.unknown;
+  const dateEnd = analysis.corpus.dateRange.end ?? locale.unknown;
 
-  const intro =
-    language === "zh-TW"
-      ? "此段为从 WordPress 语料中抽取的知识侧重点。"
-      : "This section captures knowledge priorities distilled from WordPress sources.";
+  return `${locale.headingOverview}
+${locale.knowledgeIntro}
 
-  return `### Overview
-${intro}
+${locale.headingCorpus}
+- ${locale.labelItemCount}: ${analysis.corpus.itemCount}
+- ${locale.labelAvgLength}: ${analysis.corpus.avgChars}
+- ${locale.labelDateRange}: ${dateStart} ${locale.dateConnector} ${dateEnd}
 
-### Corpus
-- Item count: ${analysis.corpus.itemCount}
-- Average length (chars): ${analysis.corpus.avgChars}
-- Date range: ${dateStart} to ${dateEnd}
-
-### Core Topics
+${locale.headingTopics}
 ${topicLine}
 
-### Canonical Claims
+${locale.headingClaims}
 ${analysis.canonicalClaims.map((x) => `- ${x}`).join("\n")}
 
-### Domain Terms
-${terms || "none"}
+${locale.headingTerms}
+${terms || locale.none}
 
-### Evidence Posts
+${locale.headingEvidence}
 ${analysis.evidencePosts
   .slice(0, 10)
-  .map((x) => `- ${x.title} (${x.date ?? "unknown"}) ${x.url ?? ""}`.trim())
+  .map((x) => `- ${x.title} (${x.date ?? locale.unknown}) ${x.url ?? ""}`.trim())
   .join("\n")}
 `;
 }
 
 function buildPersonaMarkdown(analysis, language) {
-  const intro =
-    language === "zh-TW"
-      ? "此段为写作语气、表达风格与结构偏好。"
-      : "This section captures writing tone, style, and structure preferences.";
+  const locale = LOCALE[language] ?? LOCALE.en;
+  const localizeVoice = (value) => locale.voiceMap[value] ?? value;
+  const boolValue = analysis.formatting.prefersStructuredLists
+    ? language === "zh-TW"
+      ? "是"
+      : "true"
+    : language === "zh-TW"
+      ? "否"
+      : "false";
 
-  return `### Overview
-${intro}
+  return `${locale.headingOverview}
+${locale.personaIntro}
 
-### Voice
-- Language: ${analysis.voice.language}
-- Tone: ${analysis.voice.tone}
-- Confidence: ${analysis.voice.confidence}
-- Pace: ${analysis.voice.pace}
+${locale.headingVoice}
+- ${locale.labelLanguage}: ${analysis.voice.language}
+- ${locale.labelTone}: ${localizeVoice(analysis.voice.tone)}
+- ${locale.labelConfidence}: ${localizeVoice(analysis.voice.confidence)}
+- ${locale.labelPace}: ${localizeVoice(analysis.voice.pace)}
 
-### Formatting
-- Structured lists preferred: ${analysis.formatting.prefersStructuredLists}
-- Avg post length (chars): ${analysis.formatting.avgPostLengthChars}
-- Avg sentence length (chars): ${analysis.formatting.avgSentenceLengthChars}
+${locale.headingFormatting}
+- ${locale.labelStructuredLists}: ${boolValue}
+- ${locale.labelAvgPostLength}: ${analysis.formatting.avgPostLengthChars}
+- ${locale.labelAvgSentenceLength}: ${analysis.formatting.avgSentenceLengthChars}
 
-### Reasoning Patterns
+${locale.headingPatterns}
 ${analysis.reasoningPatterns.map((x) => `- ${x}`).join("\n")}
 
-### Guardrails
+${locale.headingGuardrails}
 ${analysis.guardrails.map((x) => `- ${x}`).join("\n")}
 `;
 }
@@ -226,10 +319,14 @@ async function callModel(prompt) {
 }
 
 function buildAiPrompt({ slug, name, knowledgeMarkdown, personaMarkdown, language }) {
+  const languageInstruction =
+    language === "zh-TW"
+      ? "Output every heading and sentence in Traditional Chinese only (do not mix English except URLs and proper nouns)."
+      : "Output every heading and sentence in English only.";
   return `
 Build a final skill.md for this author profile.
 Rules:
-- Output in ${language}.
+- ${languageInstruction}
 - Keep markdown concise and precise.
 - Do not add unsupported facts.
 - Keep sections: frontmatter, title, PART A, PART B, execution rules.
@@ -251,7 +348,7 @@ export function analyzeCorpus(items, options = {}) {
   const resolvedLanguage =
     requestedLanguage === "auto" ? detectLanguageFromItems(items) : requestedLanguage;
 
-  const knowledgeAnalysis = analyzeKnowledge(items, stats);
+  const knowledgeAnalysis = analyzeKnowledge(items, stats, resolvedLanguage);
   const personaAnalysis = analyzePersona(items, resolvedLanguage);
 
   return {
