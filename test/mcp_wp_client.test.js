@@ -48,3 +48,21 @@ test("publishPost requires confirm=true", async () => {
 
   await assert.rejects(() => client.publishPost(123, false), /confirm=true/);
 });
+
+test("request surfaces non-JSON successful responses as explicit errors", async () => {
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "u",
+    appPassword: "p",
+    preferredVersion: "v2",
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return "<html>ok</html>";
+      }
+    })
+  });
+
+  await assert.rejects(() => client.listPosts({ per_page: 1 }), /not valid JSON/);
+});

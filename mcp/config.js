@@ -1,11 +1,24 @@
 const DEFAULT_TIMEOUT_MS = 15000;
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 
-function normalizeBaseUrl(input) {
+function isTrue(value) {
+  return TRUE_VALUES.has(String(value || "").trim().toLowerCase());
+}
+
+function normalizeBaseUrl(input, allowInsecureHttp = false) {
   const url = new URL(input);
-  if (!/^https?:$/.test(url.protocol)) {
-    throw new Error("WP_BASE_URL must use http or https protocol.");
+  if (url.protocol === "https:") {
+    return `${url.protocol}//${url.host}`;
   }
-  return `${url.protocol}//${url.host}`;
+  if (url.protocol === "http:" && allowInsecureHttp) {
+    return `${url.protocol}//${url.host}`;
+  }
+  if (url.protocol === "http:") {
+    throw new Error(
+      "WP_BASE_URL must use https. For local-only testing, set WP_ALLOW_INSECURE_HTTP=true."
+    );
+  }
+  throw new Error("WP_BASE_URL must use https protocol.");
 }
 
 export function loadMcpConfig(env = process.env) {
@@ -14,13 +27,15 @@ export function loadMcpConfig(env = process.env) {
   const appPassword = String(env.WP_APP_PASSWORD || "").trim();
   const preferredVersion = String(env.WP_API_VERSION || "v2").trim();
   const timeoutMs = Number(env.WP_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+  const allowInsecureHttp = isTrue(env.WP_ALLOW_INSECURE_HTTP);
 
   return {
-    baseUrl: baseUrlRaw ? normalizeBaseUrl(baseUrlRaw) : "",
+    baseUrl: baseUrlRaw ? normalizeBaseUrl(baseUrlRaw, allowInsecureHttp) : "",
     username,
     appPassword,
     preferredVersion,
-    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS,
+    allowInsecureHttp
   };
 }
 

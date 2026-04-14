@@ -10,6 +10,8 @@ It is a sidecar process and does not change existing web API routes or Vercel de
 - `WP_APP_PASSWORD` (required, WordPress Application Password)
 - `WP_API_VERSION` (optional, default: `v2`)
 - `WP_TIMEOUT_MS` (optional, default: `15000`)
+- `WP_ALLOW_INSECURE_HTTP` (optional, default: `false`; only for local testing)
+- `MCP_MAX_MESSAGE_BYTES` (optional, default: `1048576`)
 
 ## Run locally
 
@@ -74,3 +76,4 @@ Notes:
 - `title` is required.
 - `categories` and `tags` are integer ID arrays in v1.
 - If frontmatter status is `publish` in draft creation, it is forced to `draft` with warning.
+- HTTPS is required by default. To allow `http://` in local-only environments, set `WP_ALLOW_INSECURE_HTTP=true`.

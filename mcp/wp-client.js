@@ -65,10 +65,25 @@ export class WordPressClient {
       });
 
       const text = await res.text();
-      const payload = text ? JSON.parse(text) : null;
+      let payload = null;
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = null;
+        }
+      }
       if (!res.ok) {
         const detail = payload?.message || payload?.code || text || `HTTP ${res.status}`;
         const error = new Error(`WordPress request failed (${res.status}): ${detail}`);
+        error.status = res.status;
+        throw error;
+      }
+
+      if (text && payload === null) {
+        const error = new Error(
+          `WordPress response is not valid JSON (${res.status}): ${text.slice(0, 240)}`
+        );
         error.status = res.status;
         throw error;
       }

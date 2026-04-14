@@ -3,15 +3,31 @@ import { TOOL_DEFINITIONS, executeTool } from "./tools.js";
 import { WordPressClient } from "./wp-client.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
+const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 
-class StdioMessageReader {
-  constructor(onMessage) {
+export function resolveMaxMessageBytes(value, fallback = DEFAULT_MAX_MESSAGE_BYTES) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+const MAX_MESSAGE_BYTES = resolveMaxMessageBytes(process.env.MCP_MAX_MESSAGE_BYTES);
+
+export class StdioMessageReader {
+  constructor(onMessage, onProtocolError, maxMessageBytes = MAX_MESSAGE_BYTES) {
     this.onMessage = onMessage;
+    this.onProtocolError = onProtocolError;
+    this.maxMessageBytes = maxMessageBytes;
     this.buffer = Buffer.alloc(0);
   }
 
   push(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+    if (this.buffer.length > this.maxMessageBytes) {
+      this.onProtocolError(new Error("MCP message exceeds max allowed size."));
+      this.buffer = Buffer.alloc(0);
+      return;
+    }
 
     while (true) {
       const headerEnd = this.buffer.indexOf("\r\n\r\n");
@@ -25,7 +41,8 @@ class StdioMessageReader {
         return;
       }
       const contentLength = Number(contentLengthLine.split(":")[1].trim());
-      if (!Number.isFinite(contentLength) || contentLength < 0) {
+      if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > this.maxMessageBytes) {
+        this.onProtocolError(new Error("Invalid or oversized Content-Length."));
         this.buffer = Buffer.alloc(0);
         return;
       }
@@ -138,14 +155,25 @@ async function handleRequest(req, writer, context) {
 function main() {
   const writer = new StdioMessageWriter();
   const context = createServerContext();
-  const reader = new StdioMessageReader((message) => {
-    if (message?.jsonrpc !== "2.0") return;
-    if (typeof message.id === "undefined") return;
-    handleRequest(message, writer, context);
-  });
+  const reader = new StdioMessageReader(
+    (message) => {
+      if (message?.jsonrpc !== "2.0") return;
+      if (typeof message.id === "undefined") return;
+      handleRequest(message, writer, context);
+    },
+    (error) => {
+      writer.send(
+        failure(null, -32700, error.message, {
+          limit: MAX_MESSAGE_BYTES
+        })
+      );
+    }
+  );
 
   process.stdin.on("data", (chunk) => reader.push(chunk));
   process.stdin.on("error", () => process.exit(1));
 }
 
-main();
+if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}`) {
+  main();
+}
