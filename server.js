@@ -25,12 +25,12 @@ const publicDir = path.join(__dirname, "public");
 app.use(express.json({ limit: "20mb" }));
 app.use(express.static(publicDir));
 
-function logServerError(context, error) {
+export function logServerError(context, error) {
   // eslint-disable-next-line no-console
   console.error(`[${context}]`, error);
 }
 
-function sendSafeError(res, {
+export function sendSafeError(res, {
   status = 500,
   message = "Internal server error.",
   context = "server",
@@ -42,7 +42,7 @@ function sendSafeError(res, {
   return res.status(status).json({ error: message });
 }
 
-function readAdminKey(req) {
+export function readAdminKey(req) {
   const headerValue = String(req.get("x-admin-key") || "").trim();
   if (headerValue) return headerValue;
   const authHeader = String(req.get("authorization") || "");
@@ -50,15 +50,15 @@ function readAdminKey(req) {
   return bearerMatch ? bearerMatch[1].trim() : "";
 }
 
-function requireAdminForMutation(req, res, next) {
-  if (!ADMIN_API_KEY) {
+export function requireAdminForMutation(req, res, next, expectedAdminKey = ADMIN_API_KEY) {
+  if (!expectedAdminKey) {
     return sendSafeError(res, {
       status: 503,
       message: "Admin actions are not configured.",
       context: "admin-auth"
     });
   }
-  if (readAdminKey(req) !== ADMIN_API_KEY) {
+  if (readAdminKey(req) !== expectedAdminKey) {
     return sendSafeError(res, {
       status: 403,
       message: "Forbidden.",

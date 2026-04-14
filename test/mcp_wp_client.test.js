@@ -200,3 +200,85 @@ test("publishPost returns updated post when confirm=true", async () => {
   assert.equal(out.post.status, "publish");
   assert.equal(out.post.id, 12);
 });
+
+test("resolveVersion uses cached resolved version", async () => {
+  let calls = 0;
+  const mockFetch = async () => {
+    calls += 1;
+    return buildResponse(200, [{ id: 1, title: { rendered: "A" }, status: "draft" }]);
+  };
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "u",
+    appPassword: "p",
+    preferredVersion: "v2",
+    fetchImpl: mockFetch
+  });
+  await client.resolveVersion();
+  await client.resolveVersion();
+  assert.equal(calls, 1);
+});
+
+test("resolveVersion throws when all candidate endpoints fail", async () => {
+  const mockFetch = async () => buildResponse(404, { message: "no" });
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "u",
+    appPassword: "p",
+    preferredVersion: "v3",
+    fetchImpl: mockFetch
+  });
+  await assert.rejects(() => client.resolveVersion(), /Could not resolve/);
+});
+
+test("updateDraftFromMarkdown success path updates draft", async () => {
+  const mockFetch = async (url, options = {}) => {
+    const u = String(url);
+    if (u.includes("per_page=1")) return buildResponse(200, [{ id: 1 }]);
+    if (options.method === "POST" && u.includes("/wp-json/wp/v2/posts/11")) {
+      return buildResponse(200, {
+        id: 11,
+        title: { rendered: "Updated Title" },
+        status: "draft",
+        link: "https://example.com/11"
+      });
+    }
+    if (u.includes("/wp-json/wp/v2/posts/11")) {
+      return buildResponse(200, {
+        id: 11,
+        title: { rendered: "Draft Title" },
+        status: "draft",
+        slug: "draft-title",
+        date: "2026-04-14",
+        modified: "2026-04-14",
+        link: "https://example.com/11",
+        excerpt: { rendered: "<p>ex</p>" },
+        content: { rendered: "<p>body</p>" },
+        categories: [],
+        tags: []
+      });
+    }
+    return buildResponse(404, { message: "not found" });
+  };
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "u",
+    appPassword: "p",
+    preferredVersion: "v2",
+    fetchImpl: mockFetch
+  });
+  const out = await client.updateDraftFromMarkdown(11, "---\ntitle: Updated Title\n---\n\nBody");
+  assert.equal(out.post.id, 11);
+  assert.equal(out.post.status, "draft");
+});
+
+test("publishPost validates positive integer id", async () => {
+  const client = new WordPressClient({
+    baseUrl: "https://example.com",
+    username: "u",
+    appPassword: "p",
+    preferredVersion: "v2",
+    fetchImpl: async () => buildResponse(200, {})
+  });
+  await assert.rejects(() => client.publishPost("x", true), /positive integer/);
+});

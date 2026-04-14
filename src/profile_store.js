@@ -4,6 +4,23 @@ import { put, list } from "@vercel/blob";
 import { buildSkillMarkdown } from "./skill_template.js";
 
 const PROFILE_ROOT = path.resolve(process.cwd(), "profiles");
+const blobDeps = {
+  putImpl: put,
+  listImpl: list,
+  fetchImpl: (...args) => fetch(...args)
+};
+
+export function setBlobDepsForTest(overrides = null) {
+  if (!overrides) {
+    blobDeps.putImpl = put;
+    blobDeps.listImpl = list;
+    blobDeps.fetchImpl = (...args) => fetch(...args);
+    return;
+  }
+  if (overrides.putImpl) blobDeps.putImpl = overrides.putImpl;
+  if (overrides.listImpl) blobDeps.listImpl = overrides.listImpl;
+  if (overrides.fetchImpl) blobDeps.fetchImpl = overrides.fetchImpl;
+}
 
 function blobEnabled() {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
@@ -13,11 +30,11 @@ function blobToken() {
   return process.env.BLOB_READ_WRITE_TOKEN;
 }
 
-function json(value) {
+export function json(value) {
   return JSON.stringify(value, null, 2);
 }
 
-function parseJson(raw, fallback = null) {
+export function parseJson(raw, fallback = null) {
   try {
     return JSON.parse(raw);
   } catch {
@@ -25,7 +42,7 @@ function parseJson(raw, fallback = null) {
   }
 }
 
-function legacyRagToWikiMarkdown(rag, slug) {
+export function legacyRagToWikiMarkdown(rag, slug) {
   const rows = Array.isArray(rag) ? rag : [];
   const body = rows
     .slice(0, 100)
@@ -40,7 +57,7 @@ function legacyRagToWikiMarkdown(rag, slug) {
   return `# Wiki Index\n\n## Legacy RAG Snapshot\n\nProfile: ${slug}\n\n${body || "No legacy chunks available."}\n`;
 }
 
-function toVersionId() {
+export function toVersionId() {
   return `v-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
 
@@ -71,33 +88,33 @@ export function toSlug(input) {
     .slice(0, 60) || "author";
 }
 
-async function writeBlob(pathname, content) {
-  await put(pathname, content, {
+export async function writeBlob(pathname, content, putImpl = blobDeps.putImpl) {
+  await putImpl(pathname, content, {
     access: "public",
     addRandomSuffix: false,
     token: blobToken()
   });
 }
 
-async function readBlob(pathname) {
-  const result = await list({
+export async function readBlob(pathname, listImpl = blobDeps.listImpl, fetchImpl = blobDeps.fetchImpl) {
+  const result = await listImpl({
     prefix: pathname,
     token: blobToken()
   });
   const match = result.blobs.find((x) => x.pathname === pathname);
   if (!match) throw new Error(`Blob not found: ${pathname}`);
-  const res = await fetch(match.url);
+  const res = await fetchImpl(match.url);
   if (!res.ok) throw new Error(`Failed to fetch blob: ${pathname}`);
   return res.text();
 }
 
-function isBlobNotFoundError(error) {
+export function isBlobNotFoundError(error) {
   const message = String(error?.message || "");
   return message.startsWith("Blob not found:");
 }
 
-async function listBlobPrefix(prefix) {
-  const result = await list({
+export async function listBlobPrefix(prefix, listImpl = blobDeps.listImpl) {
+  const result = await listImpl({
     prefix,
     token: blobToken()
   });
@@ -108,7 +125,7 @@ function profilePath(slug, file) {
   return `profiles/${slug}/${file}`;
 }
 
-function assertSafeVersionFilename(versionInput) {
+export function assertSafeVersionFilename(versionInput) {
   const version = String(versionInput || "").trim();
   if (!/^[a-zA-Z0-9._-]+\.json$/.test(version)) {
     throw new Error("Invalid version identifier.");
@@ -236,7 +253,7 @@ export async function listProfiles() {
       if (!blob.pathname.endsWith("/meta.json")) continue;
       const slug = blob.pathname.split("/")[1];
       if (!slug) continue;
-      const metaRaw = await fetch(blob.url).then((r) => r.text());
+      const metaRaw = await blobDeps.fetchImpl(blob.url).then((r) => r.text());
       const meta = parseJson(metaRaw, {});
       map.set(slug, {
         slug,

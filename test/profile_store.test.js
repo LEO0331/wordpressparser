@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   applyProfileCorrection,
+  backupProfileStore,
+  listProfiles,
   listProfileVersions,
+  profileRoot,
   readNormalizedItems,
   readProfile,
   rollbackProfileStore,
@@ -22,6 +25,7 @@ async function cleanup() {
 test("toSlug normalizes input safely", () => {
   assert.equal(toSlug(" Leo Li Cheng "), "leo-li-cheng");
   assert.equal(toSlug(""), "author");
+  assert.ok(profileRoot().endsWith("profiles"));
 });
 
 test("save/read/update/correct/rollback lifecycle works on filesystem backend", async () => {
@@ -120,4 +124,73 @@ test("rollbackProfileStore rejects unsafe version values", async () => {
     () => rollbackProfileStore(slug, "../outside.json"),
     /Invalid version identifier/
   );
+});
+
+test("listProfiles and listProfileVersions handle missing dirs", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+  const versions = await listProfileVersions(slug);
+  assert.deepEqual(versions, []);
+  const profiles = await listProfiles();
+  assert.ok(Array.isArray(profiles));
+});
+
+test("backupProfileStore creates version file and invalid snapshot is rejected", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+
+  await saveProfile({
+    slug,
+    meta: { name: "Backup", slug, language: "en", updated_at: new Date().toISOString() },
+    knowledgeMarkdown: "k",
+    personaMarkdown: "p",
+    skillMarkdown: "s",
+    wikiMarkdown: "w",
+    knowledgeAnalysis: {},
+    personaAnalysis: {},
+    normalizedItems: [{ title: "x", content: "y", date: "2026-04-01", url: "u" }]
+  });
+
+  const version = await backupProfileStore(slug);
+  assert.ok(version.endsWith(".json"));
+
+  const badVersion = "bad-snapshot.json";
+  await fs.writeFile(
+    path.join(profileDir, "versions", badVersion),
+    JSON.stringify({ nope: true }, null, 2),
+    "utf8"
+  );
+  await assert.rejects(() => rollbackProfileStore(slug, badVersion), /Invalid snapshot/);
+
+  await cleanup();
+});
+
+test("applyProfileCorrection supports knowledge scope", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+
+  await saveProfile({
+    slug,
+    meta: {
+      name: "Knowledge User",
+      slug,
+      language: "en",
+      updated_at: new Date().toISOString(),
+      knowledge_topics: ["topic"]
+    },
+    knowledgeMarkdown: "knowledge",
+    personaMarkdown: "persona",
+    skillMarkdown: "skill",
+    wikiMarkdown: "wiki",
+    knowledgeAnalysis: {},
+    personaAnalysis: {},
+    normalizedItems: [{ title: "x", content: "y", date: "2026-04-01", url: "u" }]
+  });
+
+  const out = await applyProfileCorrection(slug, "knowledge", "add stronger evidence");
+  assert.equal(out.scope, "knowledge");
+  const read = await readProfile(slug);
+  assert.ok(read.knowledgeMarkdown.includes("Correction Log"));
+
+  await cleanup();
 });

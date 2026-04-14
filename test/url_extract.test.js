@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import {
   assertSafeExtractionTarget,
   detectPlatformByUrl,
+  fetchWpComItems,
+  fetchWpRestItems,
   fetchByUrl,
   fetchPixnetByUrl,
   fetchWordPressByUrl,
+  sanitizeSiteUrl,
   parsePixnetIdentity
 } from "../src/url_extract.js";
 
@@ -147,5 +150,80 @@ test("assertSafeExtractionTarget blocks localhost and private network addresses"
   await assert.rejects(
     () => assertSafeExtractionTarget("https://example.com/blog", privateResolver),
     /private or local network/
+  );
+});
+
+test("sanitizeSiteUrl rejects unsupported protocols", () => {
+  assert.throws(() => sanitizeSiteUrl("ftp://example.com"), /Only http\/https/);
+});
+
+test("assertSafeExtractionTarget allows public literal IP", async () => {
+  await assert.doesNotReject(() => assertSafeExtractionTarget("https://8.8.8.8/blog"));
+});
+
+test("fetchWpRestItems breaks on 404 and throws on non-404 errors", async () => {
+  const notFound = async () => jsonResponse(404, {});
+  const rows = await fetchWpRestItems("https://example.com", "posts", notFound);
+  assert.equal(rows.length, 0);
+
+  const fail = async () => jsonResponse(500, {});
+  await assert.rejects(
+    () => fetchWpRestItems("https://example.com", "posts", fail),
+    /posts request failed with 500/
+  );
+});
+
+test("fetchWpComItems handles pages and request errors", async () => {
+  const okFetch = async (url) => {
+    const u = String(url);
+    if (u.includes("page=1")) {
+      return jsonResponse(200, { posts: [{ id: 1 }, { id: 2 }] });
+    }
+    return jsonResponse(200, { posts: [] });
+  };
+  const rows = await fetchWpComItems("example.com", "page", okFetch);
+  assert.equal(rows.length, 2);
+
+  const failFetch = async () => jsonResponse(500, {});
+  await assert.rejects(() => fetchWpComItems("example.com", "post", failFetch), /WordPress.com API/);
+});
+
+test("fetchWordPressByUrl throws when wp v2 and wp.com both empty with wp error", async () => {
+  const mockFetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/wp-json/wp/v2/")) return jsonResponse(500, {});
+    return jsonResponse(404, {});
+  };
+  const resolver = async () => [{ address: "93.184.216.34" }];
+  await assert.rejects(
+    () => fetchWordPressByUrl("https://example.com", mockFetch, resolver),
+    /Unable to fetch WordPress data from URL/
+  );
+});
+
+test("parsePixnetIdentity handles host pixnet.net with user path", () => {
+  assert.equal(parsePixnetIdentity("https://pixnet.net/alice"), "alice");
+  assert.throws(
+    () => parsePixnetIdentity("https://www.pixnet.net/blog"),
+    /Cannot infer PIXNET user/
+  );
+});
+
+test("fetchPixnetByUrl surfaces non-json payload errors", async () => {
+  const mockFetch = async (url) => {
+    if (String(url).startsWith("https://emma.pixnet.cc/blog/articles")) {
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return "<html>oops</html>";
+        }
+      };
+    }
+    return jsonResponse(404, {});
+  };
+  await assert.rejects(
+    () => fetchPixnetByUrl("https://alice.pixnet.net/blog", mockFetch),
+    /Unable to fetch PIXNET data from URL/
   );
 });

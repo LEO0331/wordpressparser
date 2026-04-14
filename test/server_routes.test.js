@@ -184,6 +184,18 @@ test("/api/health returns service status", async () => {
   assert.ok(res.body.timestamp);
 });
 
+test("GET / returns index file", async () => {
+  const req = {};
+  const res = {
+    sentFile: "",
+    sendFile(file) {
+      this.sentFile = file;
+    }
+  };
+  await invokeRoute(app, "get", "/", req, res);
+  assert.ok(String(res.sentFile).endsWith("/public/index.html"));
+});
+
 test("/api/analyze validates empty items and analyzes valid payload", async () => {
   const emptyReq = { body: { items: [] } };
   const emptyRes = createRes();
@@ -313,6 +325,89 @@ test("/api/profiles/:slug returns 404 for missing profile", async () => {
   await invokeRoute(app, "get", "/api/profiles/:slug", req, res);
   assert.equal(res.statusCode, 404);
   assert.equal(res.body.error, "Profile not found.");
+});
+
+test("/api/profiles/save validates missing items", async () => {
+  const res = createRes();
+  await invokeRoute(app, "post", "/api/profiles/save", { body: { items: [] } }, res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, "No items to save.");
+});
+
+test("admin update returns 400 when merged data is empty", async () => {
+  const res = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/:slug/update",
+    {
+      params: { slug: "non-existent" },
+      body: { items: [] },
+      get(name) {
+        if (name === "x-admin-key") return "secret-key";
+        return "";
+      }
+    },
+    res
+  );
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error, "No profile data to update.");
+});
+
+test("admin update/correct/rollback surface safe 500 messages on missing profile/invalid version", async () => {
+  const authReqBase = {
+    get(name) {
+      if (name === "x-admin-key") return "secret-key";
+      return "";
+    }
+  };
+
+  const updateRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/:slug/update",
+    {
+      ...authReqBase,
+      params: { slug: "missing-slug" },
+      body: {
+        items: [{ title: "x", content: "y", date: "2026-01-01", url: "u", categories: [], tags: [] }]
+      }
+    },
+    updateRes
+  );
+  assert.equal(updateRes.statusCode, 500);
+  assert.equal(updateRes.body.error, "Failed to update profile.");
+
+  const correctRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/:slug/correct",
+    {
+      ...authReqBase,
+      params: { slug: "missing-slug" },
+      body: { scope: "persona", correction: "fix this" }
+    },
+    correctRes
+  );
+  assert.equal(correctRes.statusCode, 500);
+  assert.equal(correctRes.body.error, "Failed to apply correction.");
+
+  const rollbackRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/:slug/rollback",
+    {
+      ...authReqBase,
+      params: { slug: "missing-slug" },
+      body: { version: "bad/../v.json" }
+    },
+    rollbackRes
+  );
+  assert.equal(rollbackRes.statusCode, 500);
+  assert.equal(rollbackRes.body.error, "Failed to rollback profile.");
 });
 
 test("admin protected update/correct/rollback works with key", async () => {
