@@ -28,9 +28,15 @@
         </div>
 
         <div id="urlSource" class="source-block hidden">
-          <label for="wpUrl">WordPress URL</label>
+          <label for="wpUrl">WordPress / PIXNET URL</label>
           <input id="wpUrl" type="url" placeholder="https://leolicheng.wordpress.com/" />
-          <p class="hint">The server fetches posts/pages via WordPress REST APIs.</p>
+          <label for="platformMode" class="mt">URL platform</label>
+          <select id="platformMode">
+            <option value="auto">Auto detect (recommended)</option>
+            <option value="wordpress">WordPress</option>
+            <option value="pixnet">痞客邦 PIXNET</option>
+          </select>
+          <p class="hint">The server fetches public posts/articles from WordPress or PIXNET.</p>
         </div>
 
         <div class="grid">

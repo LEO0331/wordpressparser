@@ -18,6 +18,7 @@ const el = {
   jsonFile: document.getElementById("jsonFile"),
   jsonText: document.getElementById("jsonText"),
   wpUrl: document.getElementById("wpUrl"),
+  platformMode: document.getElementById("platformMode"),
   profileSlug: document.getElementById("profileSlug"),
   profileName: document.getElementById("profileName"),
   languageMode: document.getElementById("languageMode"),
@@ -118,9 +119,10 @@ async function parseFromJson() {
 
 async function parseFromUrl() {
   const url = el.wpUrl.value.trim();
-  if (!url) throw new Error("Enter a WordPress URL.");
-  state.parsedRawSource = { url };
-  return postJson("/api/extract-url", { url });
+  if (!url) throw new Error("Enter a WordPress or PIXNET URL.");
+  const platform = el.platformMode?.value || "auto";
+  state.parsedRawSource = { url, platform };
+  return postJson("/api/extract-url", { url, platform });
 }
 
 function renderStats(items, metadata) {
@@ -212,7 +214,15 @@ async function handleSave() {
       options: {
         language: el.languageMode.value,
         mode: el.generationMode.value,
-        sourceTypes: [state.sourceMode === "json" ? "wordpress_json" : "wordpress_url"]
+        sourceTypes: [
+          state.sourceMode === "json"
+            ? "wordpress_json"
+            : el.platformMode?.value === "pixnet"
+              ? "pixnet_url"
+              : el.platformMode?.value === "wordpress"
+                ? "wordpress_url"
+                : "web_url_auto"
+        ]
       }
     });
 

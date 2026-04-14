@@ -5,6 +5,7 @@ Node-first pipeline that turns WordPress sources into a reusable `skill.md`.
 ## What it does
 
 - Ingests WordPress JSON, URL, or pasted JSON in the UI
+- Supports URL extraction from WordPress and PIXNET (public articles)
 - Normalizes posts/pages into a corpus
 - Analyzes two tracks:
   - Knowledge
@@ -69,7 +70,7 @@ Recommended project settings:
 - `POST /api/normalize`
   - body: `{ "data": <wordpress_json> }`
 - `POST /api/extract-url`
-  - body: `{ "url": "https://example.wordpress.com/" }`
+  - body: `{ "url": "https://example.wordpress.com/", "platform": "auto|wordpress|pixnet" }`
 - `POST /api/analyze`
   - body: `{ "items": [...], "options": { "language": "en|zh-TW|auto", "mode": "parser|ai" } }`
 - `POST /api/build`
