@@ -83,7 +83,7 @@ function failure(id, code, message, data) {
   };
 }
 
-function createServerContext() {
+export function createServerContext() {
   const config = loadMcpConfig();
   const client = new WordPressClient({
     baseUrl: config.baseUrl,
@@ -95,7 +95,7 @@ function createServerContext() {
   return { config, client };
 }
 
-async function handleRequest(req, writer, context) {
+export async function handleRequest(req, writer, context) {
   const { id, method, params } = req;
 
   try {
@@ -152,7 +152,7 @@ async function handleRequest(req, writer, context) {
   }
 }
 
-function main() {
+export function main() {
   const writer = new StdioMessageWriter();
   const context = createServerContext();
   const reader = new StdioMessageReader(
