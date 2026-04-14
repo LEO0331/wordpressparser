@@ -37,6 +37,7 @@ export async function backupProfile(slug, baseDir = path.resolve(process.cwd(), 
     "skill.md",
     "knowledge.md",
     "persona.md",
+    "wiki.md",
     "rag.json",
     path.join("analysis", "knowledge.analysis.json"),
     path.join("analysis", "persona.analysis.json")

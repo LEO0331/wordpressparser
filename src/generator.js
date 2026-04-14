@@ -1,4 +1,4 @@
-import { buildRagChunks, collectCorpusStats } from "./parser.js";
+import { collectCorpusStats } from "./parser.js";
 import { buildSkillMarkdown } from "./skill_template.js";
 
 const LANGUAGE_WHITELIST = new Set(["en", "zh-TW", "auto"]);
@@ -276,6 +276,85 @@ ${analysis.guardrails.map((x) => `- ${x}`).join("\n")}
 `;
 }
 
+function buildWikiMarkdown({ items, knowledgeAnalysis, personaAnalysis, language, slug, name }) {
+  const isZh = language === "zh-TW";
+  const topics = knowledgeAnalysis.coreTopics.slice(0, 10);
+  const evidence = knowledgeAnalysis.evidencePosts.slice(0, 12);
+  const topTerms = knowledgeAnalysis.domainTerms.slice(0, 20);
+  const mapTopics = topics.slice(0, 6);
+
+  const headingIndex = isZh ? "# Wiki 索引" : "# Wiki Index";
+  const headingSummary = isZh ? "## 概覽" : "## Overview";
+  const headingTopics = isZh ? "## 關鍵主題" : "## Key Topics";
+  const headingMap = isZh ? "## 知識地圖" : "## Knowledge Map";
+  const headingSources = isZh ? "## 來源文章" : "## Source Articles";
+  const headingTerms = isZh ? "## 詞彙索引" : "## Term Index";
+  const headingQuestions = isZh ? "## 後續提問建議" : "## Suggested Follow-up Questions";
+
+  const fallback = isZh ? "無" : "none";
+  const unknown = isZh ? "未知" : "unknown";
+  const topicList = topics.length ? topics.map((x) => `- ${x}`).join("\n") : `- ${fallback}`;
+  const termList = topTerms.length ? topTerms.map((x) => `- ${x}`).join("\n") : `- ${fallback}`;
+  const sourceList = evidence.length
+    ? evidence
+        .map((x) => `- ${x.title} (${x.date ?? unknown}) ${x.url ?? ""}`.trim())
+        .join("\n")
+    : `- ${fallback}`;
+
+  const mapLines =
+    mapTopics.length > 0
+      ? mapTopics
+          .map((topic) => {
+            const related = evidence
+              .filter((x) => String(x.title || "").toLowerCase().includes(String(topic).toLowerCase()))
+              .slice(0, 3)
+              .map((x) => x.title)
+              .filter(Boolean);
+            const relatedText = related.length ? related.join(" | ") : fallback;
+            return `- ${topic}: ${relatedText}`;
+          })
+          .join("\n")
+      : `- ${fallback}`;
+
+  const questions = isZh
+    ? [
+        `此作者對「${topics[0] ?? "核心主題"}」的主要立場是什麼？`,
+        "有哪些可追溯到來源文章的關鍵證據？",
+        "若要延伸成可執行建議，下一步應該是什麼？"
+      ]
+    : [
+        `What is the author's main stance on "${topics[0] ?? "the primary topic"}"?`,
+        "Which key claims are directly traceable to source posts?",
+        "What practical next-step guidance can be derived from this corpus?"
+      ];
+
+  return `${headingIndex}
+
+${headingSummary}
+- ${isZh ? "名稱" : "Name"}: ${name}
+- ${isZh ? "Slug" : "Slug"}: ${slug}
+- ${isZh ? "語言" : "Language"}: ${language}
+- ${isZh ? "條目數" : "Item count"}: ${items.length}
+- ${isZh ? "語氣" : "Tone"}: ${personaAnalysis.voice.tone}
+- ${isZh ? "節奏" : "Pace"}: ${personaAnalysis.voice.pace}
+
+${headingTopics}
+${topicList}
+
+${headingMap}
+${mapLines}
+
+${headingSources}
+${sourceList}
+
+${headingTerms}
+${termList}
+
+${headingQuestions}
+${questions.map((x) => `- ${x}`).join("\n")}
+`;
+}
+
 function extractResponseText(responseJson) {
   if (typeof responseJson?.output_text === "string" && responseJson.output_text.trim()) {
     return responseJson.output_text.trim();
@@ -414,14 +493,14 @@ export async function buildProfileArtifacts(payload) {
     }
   }
 
-  const rag = buildRagChunks(items).map((chunk) => ({
-    ...chunk,
-    metadata: {
-      ...chunk.metadata,
-      slug,
-      topic_hint: analysis.knowledgeAnalysis.coreTopics[0] ?? null
-    }
-  }));
+  const wikiMarkdown = buildWikiMarkdown({
+    items,
+    knowledgeAnalysis: analysis.knowledgeAnalysis,
+    personaAnalysis: analysis.personaAnalysis,
+    language: analysis.metadata.language,
+    slug,
+    name
+  });
 
   const meta = {
     name,
@@ -455,7 +534,7 @@ export async function buildProfileArtifacts(payload) {
     knowledgeMarkdown,
     personaMarkdown,
     skillMarkdown,
-    rag,
+    wikiMarkdown,
     metadata: {
       modeRequested,
       modeUsed,

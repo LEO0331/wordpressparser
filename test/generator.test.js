@@ -87,7 +87,8 @@ test("generateArtifacts remains backward compatible", async () => {
     mode: "parser"
   });
   assert.ok(typeof out.skillMarkdown === "string");
-  assert.ok(Array.isArray(out.rag));
+  assert.ok(typeof out.wikiMarkdown === "string");
+  assert.ok(out.wikiMarkdown.includes("# Wiki"));
 
   if (oldKey) process.env.OPENAI_API_KEY = oldKey;
 });

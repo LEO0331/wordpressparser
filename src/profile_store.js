@@ -25,6 +25,21 @@ function parseJson(raw, fallback = null) {
   }
 }
 
+function legacyRagToWikiMarkdown(rag, slug) {
+  const rows = Array.isArray(rag) ? rag : [];
+  const body = rows
+    .slice(0, 100)
+    .map((item) => {
+      const title = item?.metadata?.title || "Untitled";
+      const date = item?.metadata?.date || "unknown";
+      const url = item?.metadata?.url || "";
+      const text = String(item?.text || "").trim();
+      return `### ${title}\n- Date: ${date}\n- URL: ${url}\n\n${text}`;
+    })
+    .join("\n\n");
+  return `# Wiki Index\n\n## Legacy RAG Snapshot\n\nProfile: ${slug}\n\n${body || "No legacy chunks available."}\n`;
+}
+
 function toVersionId() {
   return `v-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
@@ -36,6 +51,11 @@ async function exists(target) {
   } catch {
     return false;
   }
+}
+
+async function readTextIfExists(target) {
+  if (!(await exists(target))) return null;
+  return fs.readFile(target, "utf8");
 }
 
 export function profileRoot() {
@@ -71,6 +91,11 @@ async function readBlob(pathname) {
   return res.text();
 }
 
+function isBlobNotFoundError(error) {
+  const message = String(error?.message || "");
+  return message.startsWith("Blob not found:");
+}
+
 async function listBlobPrefix(prefix) {
   const result = await list({
     prefix,
@@ -93,7 +118,7 @@ async function saveLocal(slug, payload) {
   await fs.writeFile(path.join(profileDir, "knowledge.md"), payload.knowledgeMarkdown, "utf8");
   await fs.writeFile(path.join(profileDir, "persona.md"), payload.personaMarkdown, "utf8");
   await fs.writeFile(path.join(profileDir, "skill.md"), payload.skillMarkdown, "utf8");
-  await fs.writeFile(path.join(profileDir, "rag.json"), json(payload.rag), "utf8");
+  await fs.writeFile(path.join(profileDir, "wiki.md"), payload.wikiMarkdown ?? "", "utf8");
   await fs.writeFile(path.join(profileDir, "analysis", "knowledge.analysis.json"), json(payload.knowledgeAnalysis), "utf8");
   await fs.writeFile(path.join(profileDir, "analysis", "persona.analysis.json"), json(payload.personaAnalysis), "utf8");
   await fs.writeFile(path.join(profileDir, "raw", "normalized.json"), json(payload.normalizedItems ?? []), "utf8");
@@ -108,7 +133,7 @@ async function saveBlob(slug, payload) {
     writeBlob(profilePath(slug, "knowledge.md"), payload.knowledgeMarkdown),
     writeBlob(profilePath(slug, "persona.md"), payload.personaMarkdown),
     writeBlob(profilePath(slug, "skill.md"), payload.skillMarkdown),
-    writeBlob(profilePath(slug, "rag.json"), json(payload.rag)),
+    writeBlob(profilePath(slug, "wiki.md"), payload.wikiMarkdown ?? ""),
     writeBlob(profilePath(slug, "analysis/knowledge.analysis.json"), json(payload.knowledgeAnalysis)),
     writeBlob(profilePath(slug, "analysis/persona.analysis.json"), json(payload.personaAnalysis)),
     writeBlob(profilePath(slug, "raw/normalized.json"), json(payload.normalizedItems ?? []))
@@ -122,13 +147,18 @@ async function readLocal(slug) {
   const profileDir = path.join(PROFILE_ROOT, slug);
   if (!(await exists(profileDir))) throw new Error("Profile not found");
 
-  const [meta, knowledgeMarkdown, personaMarkdown, skillMarkdown, ragRaw] = await Promise.all([
+  const [meta, knowledgeMarkdown, personaMarkdown, skillMarkdown, wikiRaw, legacyRagRaw] = await Promise.all([
     fs.readFile(path.join(profileDir, "meta.json"), "utf8"),
     fs.readFile(path.join(profileDir, "knowledge.md"), "utf8"),
     fs.readFile(path.join(profileDir, "persona.md"), "utf8"),
     fs.readFile(path.join(profileDir, "skill.md"), "utf8"),
-    fs.readFile(path.join(profileDir, "rag.json"), "utf8")
+    readTextIfExists(path.join(profileDir, "wiki.md")),
+    readTextIfExists(path.join(profileDir, "rag.json"))
   ]);
+
+  const wikiMarkdown =
+    wikiRaw ??
+    (legacyRagRaw ? legacyRagToWikiMarkdown(parseJson(legacyRagRaw, []), slug) : "");
 
   return {
     slug,
@@ -137,18 +167,31 @@ async function readLocal(slug) {
     knowledgeMarkdown,
     personaMarkdown,
     skillMarkdown,
-    rag: parseJson(ragRaw, [])
+    wikiMarkdown
   };
 }
 
 async function readBlobProfile(slug) {
-  const [meta, knowledgeMarkdown, personaMarkdown, skillMarkdown, ragRaw] = await Promise.all([
+  const [meta, knowledgeMarkdown, personaMarkdown, skillMarkdown] = await Promise.all([
     readBlob(profilePath(slug, "meta.json")),
     readBlob(profilePath(slug, "knowledge.md")),
     readBlob(profilePath(slug, "persona.md")),
-    readBlob(profilePath(slug, "skill.md")),
-    readBlob(profilePath(slug, "rag.json"))
+    readBlob(profilePath(slug, "skill.md"))
   ]);
+
+  let wikiMarkdown = "";
+  try {
+    wikiMarkdown = await readBlob(profilePath(slug, "wiki.md"));
+  } catch (error) {
+    if (!isBlobNotFoundError(error)) throw error;
+    try {
+      const legacyRagRaw = await readBlob(profilePath(slug, "rag.json"));
+      wikiMarkdown = legacyRagToWikiMarkdown(parseJson(legacyRagRaw, []), slug);
+    } catch (legacyError) {
+      if (!isBlobNotFoundError(legacyError)) throw legacyError;
+      wikiMarkdown = "";
+    }
+  }
 
   return {
     slug,
@@ -157,7 +200,7 @@ async function readBlobProfile(slug) {
     knowledgeMarkdown,
     personaMarkdown,
     skillMarkdown,
-    rag: parseJson(ragRaw, [])
+    wikiMarkdown
   };
 }
 
@@ -272,7 +315,7 @@ export async function rollbackProfileStore(slugInput, version) {
     knowledgeMarkdown: profile.knowledgeMarkdown,
     personaMarkdown: profile.personaMarkdown,
     skillMarkdown: profile.skillMarkdown,
-    rag: profile.rag,
+    wikiMarkdown: profile.wikiMarkdown ?? legacyRagToWikiMarkdown(profile.rag, slug),
     knowledgeAnalysis: {},
     personaAnalysis: {},
     normalizedItems: await readNormalizedItems(slug).catch(() => [])
@@ -343,7 +386,7 @@ export async function applyProfileCorrection(slugInput, scope, correction) {
     knowledgeMarkdown,
     personaMarkdown,
     skillMarkdown,
-    rag: profile.rag,
+    wikiMarkdown: profile.wikiMarkdown ?? legacyRagToWikiMarkdown(profile.rag, slug),
     knowledgeAnalysis: {},
     personaAnalysis: {},
     normalizedItems: await readNormalizedItems(slug).catch(() => [])

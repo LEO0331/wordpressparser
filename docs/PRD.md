@@ -8,7 +8,7 @@ Generate reusable `skill.md` artifacts from WordPress data to build personal ton
 
 - Input: WordPress URL, WordPress JSON, pasted text
 - Language: English and Traditional Chinese only
-- Output: `skill.md` (primary), `knowledge.md`, `persona.md`, `rag.json`, `meta.json`
+- Output: `skill.md` (primary), `knowledge.md`, `persona.md`, `wiki.md`, `meta.json`
 - Persistent profiles under `profiles/{slug}/`
 - Incremental update and rollback
 

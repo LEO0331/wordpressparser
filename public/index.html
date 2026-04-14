@@ -11,7 +11,7 @@
       <section class="panel input-panel">
         <h1>WordPress Persona Parser</h1>
         <p class="subtitle">
-          Parse WordPress JSON or URL, then generate <code>skill.md</code> and optional RAG chunks.
+          Parse WordPress JSON or URL, then generate <code>skill.md</code> and optional <code>wiki.md</code>.
         </p>
 
         <div class="source-switch">
@@ -57,7 +57,7 @@
             <label for="outputMode">Artifact output</label>
             <select id="outputMode">
               <option value="skill">Skill.md only</option>
-              <option value="both">Skill.md + RAG</option>
+              <option value="both">Skill.md + Wiki</option>
             </select>
           </div>
         </div>
@@ -82,9 +82,9 @@
       <section class="panel output-panel">
         <div class="toolbar">
           <button id="tabSkill" class="chip active" type="button">skill.md</button>
-          <button id="tabRag" class="chip" type="button">rag.json</button>
+          <button id="tabWiki" class="chip" type="button">wiki.md</button>
           <button id="downloadSkillBtn" type="button" disabled>Download skill.md</button>
-          <button id="downloadRagBtn" type="button" disabled>Download rag.json</button>
+          <button id="downloadWikiBtn" type="button" disabled>Download wiki.md</button>
         </div>
         <pre id="output" class="output">No output yet.</pre>
       </section>

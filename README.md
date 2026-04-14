@@ -13,7 +13,7 @@ Node-first pipeline that turns WordPress sources into a reusable `skill.md`.
   - `skill.md` (primary)
   - `knowledge.md`
   - `persona.md`
-  - `rag.json`
+  - `wiki.md`
   - `meta.json`
 - Stores profiles under `profiles/{slug}/` with version snapshots
 
@@ -53,7 +53,7 @@ Storage behavior:
 
 ## Vercel deployment
 
-This repo includes [vercel.json](C:\Users\LeoLi\Documents\wordpressparser\vercel.json) tuned for Express.
+This repo includes [vercel.json](./vercel.json) tuned for Express.
 
 Recommended project settings:
 - Framework Preset: Other
@@ -108,7 +108,7 @@ See setup and tool docs in `docs/mcp-wordpress.md`.
 
 ## CI/CD
 
-GitHub Actions pipeline is included at [ci.yml](C:\Users\LeoLi\Documents\wordpressparser\.github\workflows\ci.yml):
+GitHub Actions pipeline is included at [ci.yml](./.github/workflows/ci.yml):
 - install dependencies
 - run static check
 - boot server

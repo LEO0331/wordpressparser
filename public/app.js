@@ -6,7 +6,7 @@ const state = {
   knowledgeMarkdown: "",
   personaMarkdown: "",
   meta: null,
-  rag: [],
+  wikiMarkdown: "",
   activeOutput: "skill"
 };
 
@@ -29,10 +29,10 @@ const el = {
   status: document.getElementById("status"),
   stats: document.getElementById("stats"),
   tabSkill: document.getElementById("tabSkill"),
-  tabRag: document.getElementById("tabRag"),
+  tabWiki: document.getElementById("tabWiki"),
   output: document.getElementById("output"),
   downloadSkillBtn: document.getElementById("downloadSkillBtn"),
-  downloadRagBtn: document.getElementById("downloadRagBtn")
+  downloadWikiBtn: document.getElementById("downloadWikiBtn")
 };
 
 function setStatus(message, options = {}) {
@@ -65,14 +65,12 @@ function switchSource(mode) {
 function switchOutputTab(tab) {
   state.activeOutput = tab;
   el.tabSkill.classList.toggle("active", tab === "skill");
-  el.tabRag.classList.toggle("active", tab === "rag");
+  el.tabWiki.classList.toggle("active", tab === "wiki");
 
   if (tab === "skill") {
     el.output.textContent = state.skillMarkdown || "No skill.md generated yet.";
   } else {
-    el.output.textContent = state.rag.length
-      ? JSON.stringify(state.rag, null, 2)
-      : "No rag.json generated yet.";
+    el.output.textContent = state.wikiMarkdown || "No wiki.md generated yet.";
   }
 }
 
@@ -183,11 +181,11 @@ async function handleGenerate() {
     state.knowledgeMarkdown = response.knowledgeMarkdown || "";
     state.personaMarkdown = response.personaMarkdown || "";
     state.meta = response.meta || null;
-    state.rag = mode === "both" ? response.rag || [] : [];
+    state.wikiMarkdown = mode === "both" ? response.wikiMarkdown || "" : "";
     switchOutputTab("skill");
 
     el.downloadSkillBtn.disabled = !state.skillMarkdown;
-    el.downloadRagBtn.disabled = !(mode === "both" && state.rag.length);
+    el.downloadWikiBtn.disabled = !(mode === "both" && state.wikiMarkdown);
     el.saveBtn.disabled = !state.skillMarkdown;
 
     const engine = response.metadata?.aiUsed ? "AI model" : "parser mode";
@@ -230,13 +228,13 @@ el.parseBtn.addEventListener("click", handleParse);
 el.generateBtn.addEventListener("click", handleGenerate);
 el.saveBtn.addEventListener("click", handleSave);
 el.tabSkill.addEventListener("click", () => switchOutputTab("skill"));
-el.tabRag.addEventListener("click", () => switchOutputTab("rag"));
+el.tabWiki.addEventListener("click", () => switchOutputTab("wiki"));
 el.downloadSkillBtn.addEventListener("click", () => {
   if (state.skillMarkdown) downloadText("skill.md", state.skillMarkdown);
 });
-el.downloadRagBtn.addEventListener("click", () => {
-  if (state.rag.length) {
-    downloadText("rag.json", JSON.stringify(state.rag, null, 2));
+el.downloadWikiBtn.addEventListener("click", () => {
+  if (state.wikiMarkdown) {
+    downloadText("wiki.md", state.wikiMarkdown);
   }
 });
 

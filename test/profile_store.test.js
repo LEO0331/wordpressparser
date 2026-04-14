@@ -43,7 +43,7 @@ test("save/read/update/correct/rollback lifecycle works on filesystem backend", 
     knowledgeMarkdown: "base knowledge",
     personaMarkdown: "base persona",
     skillMarkdown: "base skill",
-    rag: [{ id: "c1", text: "chunk", metadata: {} }],
+    wikiMarkdown: "# Wiki Index\n\n## Overview\n- Name: Unit Test",
     knowledgeAnalysis: { core_topics: ["topic-a"] },
     personaAnalysis: { voice: { tone: "concise" } },
     rawSource: { source: "test" },
@@ -80,6 +80,34 @@ test("save/read/update/correct/rollback lifecycle works on filesystem backend", 
 
   const rollbackResult = await rollbackProfileStore(slug, versionsAfterCorrection[0]);
   assert.equal(rollbackResult.restored, true);
+
+  await cleanup();
+});
+
+test("readProfile falls back to legacy rag.json when wiki.md is missing", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+
+  const legacyDir = path.resolve(process.cwd(), "profiles", slug);
+  await fs.mkdir(path.join(legacyDir, "analysis"), { recursive: true });
+  await fs.mkdir(path.join(legacyDir, "raw"), { recursive: true });
+  await fs.writeFile(
+    path.join(legacyDir, "meta.json"),
+    JSON.stringify({ name: "Legacy", slug, language: "en" }, null, 2),
+    "utf8"
+  );
+  await fs.writeFile(path.join(legacyDir, "knowledge.md"), "legacy knowledge", "utf8");
+  await fs.writeFile(path.join(legacyDir, "persona.md"), "legacy persona", "utf8");
+  await fs.writeFile(path.join(legacyDir, "skill.md"), "legacy skill", "utf8");
+  await fs.writeFile(
+    path.join(legacyDir, "rag.json"),
+    JSON.stringify([{ id: "c1", text: "legacy chunk", metadata: { title: "T1" } }], null, 2),
+    "utf8"
+  );
+
+  const read = await readProfile(slug);
+  assert.ok(read.wikiMarkdown.includes("Legacy RAG Snapshot"));
+  assert.ok(read.wikiMarkdown.includes("legacy chunk"));
 
   await cleanup();
 });

@@ -205,7 +205,7 @@ app.post("/api/profiles/save", async (req, res) => {
       knowledgeMarkdown: artifacts.knowledgeMarkdown,
       personaMarkdown: artifacts.personaMarkdown,
       skillMarkdown: artifacts.skillMarkdown,
-      rag: artifacts.rag,
+      wikiMarkdown: artifacts.wikiMarkdown,
       knowledgeAnalysis: artifacts.knowledgeAnalysis,
       personaAnalysis: artifacts.personaAnalysis,
       rawSource,
@@ -279,7 +279,7 @@ app.post("/api/profiles/:slug/update", async (req, res) => {
       knowledgeMarkdown: artifacts.knowledgeMarkdown,
       personaMarkdown: artifacts.personaMarkdown,
       skillMarkdown: artifacts.skillMarkdown,
-      rag: artifacts.rag,
+      wikiMarkdown: artifacts.wikiMarkdown,
       knowledgeAnalysis: artifacts.knowledgeAnalysis,
       personaAnalysis: artifacts.personaAnalysis,
       normalizedItems: merged

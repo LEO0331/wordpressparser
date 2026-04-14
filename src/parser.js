@@ -172,6 +172,7 @@ export function collectCorpusStats(items) {
 }
 
 export function buildRagChunks(items, chunkSize = 1200, overlap = 200) {
+  // Legacy helper kept for backward compatibility with older tests and profiles.
   const chunks = [];
   let idx = 0;
 
