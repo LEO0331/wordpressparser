@@ -1,8 +1,11 @@
 import { normalizeWordPressData } from "./parser.js";
+import dns from "node:dns/promises";
+import net from "node:net";
 
 const MAX_PAGES = 20;
 const PAGE_SIZE = 100;
 const PLATFORM_VALUES = new Set(["auto", "wordpress", "pixnet"]);
+const BLOCKED_HOSTS = new Set(["localhost", "0.0.0.0", "::1"]);
 
 function parseJsonSafe(text) {
   if (!text) return null;
@@ -22,6 +25,81 @@ export function sanitizeSiteUrl(input) {
     baseUrl: `${url.protocol}//${url.host}`,
     host: url.host
   };
+}
+
+function parseIPv4(ip) {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  const nums = parts.map((x) => Number(x));
+  if (nums.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return null;
+  return nums;
+}
+
+function isPrivateIPv4(ip) {
+  const parts = parseIPv4(ip);
+  if (!parts) return false;
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 0) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateIPv6(ip) {
+  const normalized = String(ip || "").toLowerCase();
+  if (!normalized) return true;
+  if (normalized === "::" || normalized === "::1") return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
+  if (normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")) {
+    return true;
+  }
+  if (normalized.startsWith("::ffff:")) {
+    const mapped = normalized.slice("::ffff:".length);
+    return isPrivateIPv4(mapped);
+  }
+  return false;
+}
+
+function isPrivateAddress(address) {
+  const family = net.isIP(address);
+  if (family === 4) return isPrivateIPv4(address);
+  if (family === 6) return isPrivateIPv6(address);
+  return true;
+}
+
+async function resolveHostAddresses(host, resolver = dns.lookup) {
+  const results = await resolver(host, { all: true, verbatim: true });
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new Error("No DNS records found for host.");
+  }
+  return results.map((x) => x.address).filter(Boolean);
+}
+
+export async function assertSafeExtractionTarget(inputUrl, resolver = dns.lookup) {
+  const { host } = sanitizeSiteUrl(inputUrl);
+  const lowerHost = host.toLowerCase();
+  if (BLOCKED_HOSTS.has(lowerHost) || lowerHost.endsWith(".localhost")) {
+    throw new Error("Target host is not allowed.");
+  }
+
+  const ipFamily = net.isIP(lowerHost);
+  if (ipFamily) {
+    if (isPrivateAddress(lowerHost)) {
+      throw new Error("Target host resolves to a private or local network address.");
+    }
+    return;
+  }
+
+  const addresses = await resolveHostAddresses(host, resolver);
+  if (addresses.some((x) => isPrivateAddress(x))) {
+    throw new Error("Target host resolves to a private or local network address.");
+  }
 }
 
 export function normalizePlatform(platformInput) {
@@ -81,7 +159,8 @@ export async function fetchWpComItems(host, postType = "post", fetchImpl = fetch
   return items;
 }
 
-export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch) {
+export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch, resolver = dns.lookup) {
+  await assertSafeExtractionTarget(inputUrl, resolver);
   const { baseUrl, host } = sanitizeSiteUrl(inputUrl);
   let posts = [];
   let pages = [];

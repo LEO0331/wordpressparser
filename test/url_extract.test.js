@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  assertSafeExtractionTarget,
   detectPlatformByUrl,
   fetchByUrl,
   fetchPixnetByUrl,
@@ -122,7 +123,8 @@ test("fetchWordPressByUrl keeps wordpress path behavior", async () => {
     return jsonResponse(404, {});
   };
 
-  const items = await fetchWordPressByUrl("https://example.com/", mockFetch);
+  const mockResolver = async () => [{ address: "93.184.216.34" }];
+  const items = await fetchWordPressByUrl("https://example.com/", mockFetch, mockResolver);
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "WP One");
 });
@@ -132,5 +134,18 @@ test("fetchPixnetByUrl raises actionable error if endpoints fail", async () => {
   await assert.rejects(
     () => fetchPixnetByUrl("https://charlie.pixnet.net/blog", mockFetch),
     /Unable to fetch PIXNET data from URL/
+  );
+});
+
+test("assertSafeExtractionTarget blocks localhost and private network addresses", async () => {
+  await assert.rejects(
+    () => assertSafeExtractionTarget("https://localhost/blog"),
+    /Target host is not allowed/
+  );
+
+  const privateResolver = async () => [{ address: "10.0.0.7" }];
+  await assert.rejects(
+    () => assertSafeExtractionTarget("https://example.com/blog", privateResolver),
+    /private or local network/
   );
 });

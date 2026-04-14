@@ -111,3 +111,13 @@ test("readProfile falls back to legacy rag.json when wiki.md is missing", async 
 
   await cleanup();
 });
+
+test("rollbackProfileStore rejects unsafe version values", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+
+  await assert.rejects(
+    () => rollbackProfileStore(slug, "../outside.json"),
+    /Invalid version identifier/
+  );
+});

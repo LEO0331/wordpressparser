@@ -47,6 +47,7 @@ Open `http://localhost:3000`.
 - `BLOB_READ_WRITE_TOKEN` (optional, required for persistent storage on Vercel)
 - `WP_BASE_URL`, `WP_USERNAME`, `WP_APP_PASSWORD` (optional, for MCP sidecar)
 - `WP_API_VERSION` (optional, default `v2`, for MCP sidecar)
+- `ADMIN_API_KEY` (optional but recommended; protects admin-only profile mutation endpoints)
 
 Storage behavior:
 - If `BLOB_READ_WRITE_TOKEN` is present, profile data is saved to Vercel Blob.
@@ -85,6 +86,13 @@ Recommended project settings:
   - body: `{ "scope": "knowledge|persona", "correction": "..." }`
 - `POST /api/profiles/:slug/rollback`
   - body: `{ "version": "vN-....json" }`
+
+Admin-only endpoints:
+- `/api/profiles/:slug/update`
+- `/api/profiles/:slug/correct`
+- `/api/profiles/:slug/rollback`
+
+Set `ADMIN_API_KEY` and send either `x-admin-key: <key>` or `Authorization: Bearer <key>`.
 
 ## Node utilities
 

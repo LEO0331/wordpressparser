@@ -17,12 +17,56 @@ import {
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const ADMIN_API_KEY = String(process.env.ADMIN_API_KEY || "").trim();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.static(publicDir));
+
+function logServerError(context, error) {
+  // eslint-disable-next-line no-console
+  console.error(`[${context}]`, error);
+}
+
+function sendSafeError(res, {
+  status = 500,
+  message = "Internal server error.",
+  context = "server",
+  error
+}) {
+  if (error) {
+    logServerError(context, error);
+  }
+  return res.status(status).json({ error: message });
+}
+
+function readAdminKey(req) {
+  const headerValue = String(req.get("x-admin-key") || "").trim();
+  if (headerValue) return headerValue;
+  const authHeader = String(req.get("authorization") || "");
+  const bearerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+  return bearerMatch ? bearerMatch[1].trim() : "";
+}
+
+function requireAdminForMutation(req, res, next) {
+  if (!ADMIN_API_KEY) {
+    return sendSafeError(res, {
+      status: 503,
+      message: "Admin actions are not configured.",
+      context: "admin-auth"
+    });
+  }
+  if (readAdminKey(req) !== ADMIN_API_KEY) {
+    return sendSafeError(res, {
+      status: 403,
+      message: "Forbidden.",
+      context: "admin-auth"
+    });
+  }
+  return next();
+}
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -45,7 +89,12 @@ app.post("/api/normalize", (req, res) => {
       metadata: { itemCount: items.length }
     });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    sendSafeError(res, {
+      status: 400,
+      message: "Invalid source payload.",
+      context: "normalize",
+      error
+    });
   }
 });
 
@@ -60,7 +109,12 @@ app.post("/api/extract-url", async (req, res) => {
       metadata: { itemCount: items.length }
     });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    sendSafeError(res, {
+      status: 400,
+      message: "Failed to extract content from URL.",
+      context: "extract-url",
+      error
+    });
   }
 });
 
@@ -74,7 +128,12 @@ app.post("/api/analyze", (req, res) => {
     const result = analyzeCorpus(items, options);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to analyze corpus.",
+      context: "analyze",
+      error
+    });
   }
 });
 
@@ -97,7 +156,12 @@ app.post("/api/build", async (req, res) => {
     });
     res.json(artifacts);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to build profile artifacts.",
+      context: "build",
+      error
+    });
   }
 });
 
@@ -138,7 +202,12 @@ app.post("/api/profiles/save", async (req, res) => {
       storage: saveResult
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to save profile.",
+      context: "profiles-save",
+      error
+    });
   }
 });
 
@@ -147,7 +216,12 @@ app.get("/api/profiles", async (_req, res) => {
     const profiles = await listProfiles();
     res.json({ profiles });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to list profiles.",
+      context: "profiles-list",
+      error
+    });
   }
 });
 
@@ -160,11 +234,16 @@ app.get("/api/profiles/:slug", async (req, res) => {
       versions
     });
   } catch (error) {
-    res.status(404).json({ error: error.message });
+    sendSafeError(res, {
+      status: 404,
+      message: "Profile not found.",
+      context: "profiles-read",
+      error
+    });
   }
 });
 
-app.post("/api/profiles/:slug/update", async (req, res) => {
+app.post("/api/profiles/:slug/update", requireAdminForMutation, async (req, res) => {
   try {
     const slug = toSlug(req.params.slug);
     const incomingItems = req.body?.items;
@@ -208,11 +287,16 @@ app.post("/api/profiles/:slug/update", async (req, res) => {
 
     res.json({ ...artifacts, storage: saved });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to update profile.",
+      context: "profiles-update",
+      error
+    });
   }
 });
 
-app.post("/api/profiles/:slug/correct", async (req, res) => {
+app.post("/api/profiles/:slug/correct", requireAdminForMutation, async (req, res) => {
   try {
     const slug = toSlug(req.params.slug);
     const correction = String(req.body?.correction || "").trim();
@@ -221,11 +305,16 @@ app.post("/api/profiles/:slug/correct", async (req, res) => {
     const result = await applyProfileCorrection(slug, scope, correction);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to apply correction.",
+      context: "profiles-correct",
+      error
+    });
   }
 });
 
-app.post("/api/profiles/:slug/rollback", async (req, res) => {
+app.post("/api/profiles/:slug/rollback", requireAdminForMutation, async (req, res) => {
   try {
     const slug = toSlug(req.params.slug);
     const version = req.body?.version;
@@ -233,7 +322,12 @@ app.post("/api/profiles/:slug/rollback", async (req, res) => {
     const result = await rollbackProfileStore(slug, version);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to rollback profile.",
+      context: "profiles-rollback",
+      error
+    });
   }
 });
 
@@ -247,7 +341,12 @@ app.post("/api/generate", async (req, res) => {
     const artifacts = await generateArtifacts(items, options);
     res.json(artifacts);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendSafeError(res, {
+      status: 500,
+      message: "Failed to generate artifacts.",
+      context: "generate",
+      error
+    });
   }
 });
 

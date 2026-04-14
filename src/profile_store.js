@@ -108,6 +108,14 @@ function profilePath(slug, file) {
   return `profiles/${slug}/${file}`;
 }
 
+function assertSafeVersionFilename(versionInput) {
+  const version = String(versionInput || "").trim();
+  if (!/^[a-zA-Z0-9._-]+\.json$/.test(version)) {
+    throw new Error("Invalid version identifier.");
+  }
+  return version;
+}
+
 async function saveLocal(slug, payload) {
   const profileDir = path.join(PROFILE_ROOT, slug);
   await fs.mkdir(path.join(profileDir, "raw"), { recursive: true });
@@ -299,11 +307,17 @@ export async function listProfileVersions(slugInput) {
 
 export async function rollbackProfileStore(slugInput, version) {
   const slug = toSlug(slugInput);
+  const safeVersion = assertSafeVersionFilename(version);
   let snapshotRaw;
   if (blobEnabled()) {
-    snapshotRaw = await readBlob(profilePath(slug, `versions/${version}`));
+    snapshotRaw = await readBlob(profilePath(slug, `versions/${safeVersion}`));
   } else {
-    snapshotRaw = await fs.readFile(path.join(PROFILE_ROOT, slug, "versions", version), "utf8");
+    const versionDir = path.join(PROFILE_ROOT, slug, "versions");
+    const versionFile = path.resolve(versionDir, safeVersion);
+    if (!versionFile.startsWith(path.resolve(versionDir) + path.sep)) {
+      throw new Error("Invalid version identifier.");
+    }
+    snapshotRaw = await fs.readFile(versionFile, "utf8");
   }
   const snapshot = parseJson(snapshotRaw, null);
   if (!snapshot?.profile) throw new Error("Invalid snapshot");
@@ -320,7 +334,7 @@ export async function rollbackProfileStore(slugInput, version) {
     personaAnalysis: {},
     normalizedItems: await readNormalizedItems(slug).catch(() => [])
   });
-  return { restored: true, version };
+  return { restored: true, version: safeVersion };
 }
 
 export async function saveProfile(payload) {
