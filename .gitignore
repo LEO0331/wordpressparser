@@ -3,3 +3,6 @@ node_modules
 npm-debug.log*
 profiles
 .omx
+output/playwright
+playwright-report
+test-results
