@@ -11,12 +11,13 @@
       <section class="panel input-panel">
         <h1>WordPress Persona Parser</h1>
         <p class="subtitle">
-          Parse WordPress JSON or URL, then generate <code>skill.md</code> and optional <code>wiki.md</code>.
+          Parse WordPress JSON or URL, generate <code>skill.md</code>/<code>wiki.md</code>, or migrate WordPress XML to Obsidian Markdown.
         </p>
 
         <div class="source-switch">
           <button id="sourceJsonBtn" class="chip active" type="button">Use JSON</button>
           <button id="sourceUrlBtn" class="chip" type="button">Use URL</button>
+          <button id="sourceXmlBtn" class="chip" type="button">XML Migration</button>
         </div>
 
         <div id="jsonSource" class="source-block">
@@ -37,6 +38,12 @@
             <option value="pixnet">痞客邦 PIXNET</option>
           </select>
           <p class="hint">The server fetches public posts/articles from WordPress or PIXNET.</p>
+        </div>
+
+        <div id="xmlSource" class="source-block hidden">
+          <label for="xmlFile">WordPress XML export (WXR)</label>
+          <input id="xmlFile" type="file" accept=".xml,text/xml,application/xml" />
+          <p class="hint">Uploads XML and converts posts/pages into Obsidian-ready Markdown files in one ZIP archive.</p>
         </div>
 
         <div class="grid">
@@ -79,6 +86,7 @@
           <button id="parseBtn" type="button">1. Parse Source</button>
           <button id="generateBtn" type="button" disabled>2. Generate Artifacts</button>
           <button id="saveBtn" type="button" disabled>3. Save Profile</button>
+          <button id="downloadXmlBtn" type="button" disabled>Download XML ZIP</button>
         </div>
 
         <div id="status" class="status">Waiting for input.</div>

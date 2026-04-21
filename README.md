@@ -5,6 +5,7 @@ Node-first pipeline that turns WordPress sources into a reusable `skill.md`.
 ## What it does
 
 - Ingests WordPress JSON, URL, or pasted JSON in the UI
+- Supports WordPress XML export (WXR) migration to Obsidian-ready Markdown ZIP
 - Supports URL extraction from WordPress and PIXNET (public articles)
 - Normalizes posts/pages into a corpus
 - Analyzes two tracks:
@@ -74,6 +75,10 @@ Recommended project settings:
   - body: `{ "url": "https://example.wordpress.com/", "platform": "auto|wordpress|pixnet" }`
 - `POST /api/analyze`
   - body: `{ "items": [...], "options": { "language": "en|zh-TW|auto", "mode": "parser|ai" } }`
+- `POST /api/convert-xml`
+  - upload: `multipart/form-data` with `file=<wordpress-export.xml>`
+  - success: `application/zip` (`obsidian-export.zip`) and `X-Conversion-Report` metadata header
+  - error: `{ "error": "<invalid_xml|unsupported_format|empty_export message>" }`
 - `POST /api/build`
   - body: `{ "slug": "x", "name": "X", "items": [...], "options": { ... } }`
 - `POST /api/profiles/save`

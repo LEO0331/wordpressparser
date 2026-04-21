@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { normalizeWordPressData } from "./src/parser.js";
 import { analyzeCorpus, buildProfileArtifacts, generateArtifacts } from "./src/generator.js";
 import { fetchByUrl } from "./src/url_extract.js";
+import { convertWordPressXmlToObsidian, parseMultipartXmlUpload } from "./src/xml_bridge.js";
 import {
   applyProfileCorrection,
   listProfiles,
@@ -117,6 +118,48 @@ app.post("/api/extract-url", async (req, res) => {
     });
   }
 });
+
+export function handleConvertXmlRequest(req, res) {
+  const knownClientCodes = new Set(["invalid_xml", "unsupported_format", "empty_export"]);
+  try {
+    const contentType = typeof req.get === "function"
+      ? req.get("content-type")
+      : req.headers?.["content-type"] ?? "";
+    const xmlText = parseMultipartXmlUpload(req.body, contentType);
+    const { zipBuffer, metadata } = convertWordPressXmlToObsidian(xmlText);
+    const headerMetadata = {
+      totalItems: metadata.totalItems,
+      convertedItems: metadata.convertedItems,
+      skippedItems: metadata.skippedItems,
+      warningCount: metadata.warningCount,
+      firstWarning: Array.isArray(metadata.warnings) && metadata.warnings.length
+        ? String(metadata.warnings[0]).slice(0, 240)
+        : ""
+    };
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", "attachment; filename=\"obsidian-export.zip\"");
+    res.setHeader("X-Conversion-Report", encodeURIComponent(JSON.stringify(headerMetadata)));
+    return res.status(200).send(zipBuffer);
+  } catch (error) {
+    const code = String(error?.code || "");
+    const status = knownClientCodes.has(code) ? 400 : 500;
+    const message = status === 400
+      ? error.message
+      : "Failed to convert XML export.";
+    return sendSafeError(res, {
+      status,
+      message,
+      context: "convert-xml",
+      error: status === 400 ? undefined : error
+    });
+  }
+}
+
+app.post(
+  "/api/convert-xml",
+  express.raw({ type: "multipart/form-data", limit: "25mb" }),
+  handleConvertXmlRequest
+);
 
 app.post("/api/analyze", (req, res) => {
   try {

@@ -5,7 +5,7 @@ import path from "node:path";
 
 process.env.VERCEL = "1";
 process.env.ADMIN_API_KEY = "secret-key";
-const { default: app } = await import("../server.js");
+const { default: app, handleConvertXmlRequest } = await import("../server.js");
 
 function getRouteHandlers(appInstance, method, path) {
   const layer = appInstance._router?.stack?.find(
@@ -159,6 +159,90 @@ test("/api/extract-url returns generic error text for invalid url", async () => 
   await invokeRoute(app, "post", "/api/extract-url", req, res);
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.error, "Failed to extract content from URL.");
+});
+
+test("/api/convert-xml returns zip and conversion report metadata", async () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:wp="http://wordpress.org/export/1.2/">
+  <channel>
+    <item>
+      <title>Route XML</title>
+      <link>https://example.com/route-xml</link>
+      <content:encoded><![CDATA[<p>hello <a href="https://example.com">world</a></p>]]></content:encoded>
+      <wp:post_id>900</wp:post_id>
+      <wp:post_date>2026-04-14 10:00:00</wp:post_date>
+      <wp:post_name>route-xml</wp:post_name>
+      <wp:status>publish</wp:status>
+      <wp:post_type>post</wp:post_type>
+    </item>
+  </channel>
+</rss>`;
+  const boundary = "----WebKitFormBoundaryRoute";
+  const body = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="export.xml"\r\n` +
+    "Content-Type: text/xml\r\n\r\n" +
+    xml +
+    `\r\n--${boundary}--\r\n`
+  );
+  const req = {
+    body,
+    headers: {
+      "content-type": `multipart/form-data; boundary=${boundary}`
+    }
+  };
+  const res = {
+    statusCode: 200,
+    headers: {},
+    body: null,
+    setHeader(name, value) {
+      this.headers[String(name).toLowerCase()] = value;
+    },
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    send(payload) {
+      this.body = payload;
+      return this;
+    },
+    json(payload) {
+      this.body = payload;
+      return this;
+    }
+  };
+
+  handleConvertXmlRequest(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers["content-type"], "application/zip");
+  assert.ok(Buffer.isBuffer(res.body));
+  assert.equal(res.body.subarray(0, 2).toString("utf8"), "PK");
+  const report = JSON.parse(decodeURIComponent(res.headers["x-conversion-report"]));
+  assert.equal(report.convertedItems, 1);
+  assert.equal(report.warningCount, 0);
+  assert.equal(report.firstWarning, "");
+  assert.equal("warnings" in report, false);
+});
+
+test("/api/convert-xml returns 400 with invalid_xml errors", async () => {
+  const boundary = "----WebKitFormBoundaryRoute";
+  const body = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="broken.xml"\r\n` +
+    "Content-Type: text/xml\r\n\r\n" +
+    "not xml" +
+    `\r\n--${boundary}--\r\n`
+  );
+  const req = {
+    body,
+    headers: {
+      "content-type": `multipart/form-data; boundary=${boundary}`
+    }
+  };
+  const res = createRes();
+  handleConvertXmlRequest(req, res);
+  assert.equal(res.statusCode, 400);
+  assert.ok(String(res.body.error).includes("valid WordPress WXR XML export"));
 });
 
 test("admin-only profile mutations reject unauthenticated callers", async () => {
