@@ -63,19 +63,26 @@ body::before {
   border-radius: 20px;
   padding: 22px;
   box-shadow: var(--shadow);
-  opacity: 0;
-  transform: translateY(18px);
-  animation: reveal 520ms cubic-bezier(0.2, 0.9, 0.1, 1) forwards;
-}
-
-.panel:nth-child(2) {
-  animation-delay: 160ms;
+  opacity: 1;
+  transform: none;
 }
 
 @keyframes reveal {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .panel {
+    opacity: 0;
+    transform: translateY(18px);
+    animation: reveal 520ms cubic-bezier(0.2, 0.9, 0.1, 1) forwards;
+  }
+
+  .panel:nth-child(2) {
+    animation-delay: 160ms;
   }
 }
 
