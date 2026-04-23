@@ -24,7 +24,7 @@ body {
 }
 
 body {
-  font-family: "Manrope", sans-serif;
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   color: var(--ink);
   background:
     radial-gradient(ellipse at 8% 10%, rgba(255, 201, 106, 0.2), transparent 42%),
@@ -68,15 +68,16 @@ body::before {
 }
 
 @keyframes reveal {
+  from {
+    transform: translateY(18px);
+  }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .panel {
-    opacity: 0;
     transform: translateY(18px);
     animation: reveal 520ms cubic-bezier(0.2, 0.9, 0.1, 1) forwards;
   }
@@ -88,7 +89,7 @@ body::before {
 
 h1 {
   margin: 0;
-  font-family: "DM Serif Display", serif;
+  font-family: Georgia, "Times New Roman", Times, serif;
   font-size: clamp(2rem, 4vw, 3.1rem);
   line-height: 1;
   letter-spacing: 0.01em;
