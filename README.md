@@ -127,3 +127,8 @@ GitHub Actions pipeline is included at [ci.yml](./.github/workflows/ci.yml):
 - run static check
 - boot server
 - run API smoke test (`npm run test:smoke`)
+
+Lighthouse CI pipeline is included at [lighthouse.yml](./.github/workflows/lighthouse.yml):
+- runs on PR/push/manual dispatch
+- audits `http://127.0.0.1:3000/` using [lighthouserc.json](./lighthouserc.json)
+- uploads artifacts and publishes temporary public dashboard links in the workflow summary

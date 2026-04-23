@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@400;500;700;800&display=swap");
-
 :root {
   --bg-deep: #111316;
   --bg-mid: #1d2228;
@@ -283,5 +281,12 @@ button:disabled {
 
   h1 {
     font-size: 2.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }
