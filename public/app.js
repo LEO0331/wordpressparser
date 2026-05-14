@@ -104,14 +104,15 @@ async function postJson(url, body) {
 async function parseFromJson() {
   const rawText = el.jsonText.value.trim();
   if (rawText) {
+    let payload;
     try {
-      const payload = JSON.parse(rawText);
-      const parsed = await postJson("/api/normalize", { data: payload });
-      state.parsedRawSource = payload;
-      return parsed;
+      payload = JSON.parse(rawText);
     } catch {
       throw new Error("Invalid pasted JSON format.");
     }
+    const parsed = await postJson("/api/normalize", { data: payload });
+    state.parsedRawSource = payload;
+    return parsed;
   }
 
   const file = el.jsonFile.files[0];

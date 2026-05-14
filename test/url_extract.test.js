@@ -157,8 +157,25 @@ test("sanitizeSiteUrl rejects unsupported protocols", () => {
   assert.throws(() => sanitizeSiteUrl("ftp://example.com"), /Only http\/https/);
 });
 
+test("sanitizeSiteUrl preserves baseUrl but separates hostname from port", () => {
+  const result = sanitizeSiteUrl("https://example.com:8443/blog");
+  assert.equal(result.baseUrl, "https://example.com:8443");
+  assert.equal(result.host, "example.com:8443");
+  assert.equal(result.hostname, "example.com");
+});
+
 test("assertSafeExtractionTarget allows public literal IP", async () => {
   await assert.doesNotReject(() => assertSafeExtractionTarget("https://8.8.8.8/blog"));
+});
+
+test("assertSafeExtractionTarget resolves hostname without port suffix", async () => {
+  let resolvedHost = "";
+  const resolver = async (host) => {
+    resolvedHost = host;
+    return [{ address: "93.184.216.34" }];
+  };
+  await assert.doesNotReject(() => assertSafeExtractionTarget("https://example.com:8443/blog", resolver));
+  assert.equal(resolvedHost, "example.com");
 });
 
 test("fetchWpRestItems breaks on 404 and throws on non-404 errors", async () => {
@@ -199,6 +216,11 @@ test("fetchWordPressByUrl throws when wp v2 and wp.com both empty with wp error"
     () => fetchWordPressByUrl("https://example.com", mockFetch, resolver),
     /Unable to fetch WordPress data from URL/
   );
+});
+
+test("detectPlatformByUrl and parsePixnetIdentity ignore port suffixes", () => {
+  assert.equal(detectPlatformByUrl("https://alice.pixnet.net:8080/blog"), "pixnet");
+  assert.equal(parsePixnetIdentity("https://alice.pixnet.net:8080/blog/post/1"), "alice");
 });
 
 test("parsePixnetIdentity handles host pixnet.net with user path", () => {

@@ -23,7 +23,8 @@ export function sanitizeSiteUrl(input) {
   }
   return {
     baseUrl: `${url.protocol}//${url.host}`,
-    host: url.host
+    host: url.host,
+    hostname: url.hostname
   };
 }
 
@@ -82,21 +83,21 @@ async function resolveHostAddresses(host, resolver = dns.lookup) {
 }
 
 export async function assertSafeExtractionTarget(inputUrl, resolver = dns.lookup) {
-  const { host } = sanitizeSiteUrl(inputUrl);
-  const lowerHost = host.toLowerCase();
-  if (BLOCKED_HOSTS.has(lowerHost) || lowerHost.endsWith(".localhost")) {
+  const { hostname } = sanitizeSiteUrl(inputUrl);
+  const lowerHostname = hostname.toLowerCase();
+  if (BLOCKED_HOSTS.has(lowerHostname) || lowerHostname.endsWith(".localhost")) {
     throw new Error("Target host is not allowed.");
   }
 
-  const ipFamily = net.isIP(lowerHost);
+  const ipFamily = net.isIP(lowerHostname);
   if (ipFamily) {
-    if (isPrivateAddress(lowerHost)) {
+    if (isPrivateAddress(lowerHostname)) {
       throw new Error("Target host resolves to a private or local network address.");
     }
     return;
   }
 
-  const addresses = await resolveHostAddresses(host, resolver);
+  const addresses = await resolveHostAddresses(hostname, resolver);
   if (addresses.some((x) => isPrivateAddress(x))) {
     throw new Error("Target host resolves to a private or local network address.");
   }
@@ -110,8 +111,8 @@ export function normalizePlatform(platformInput) {
 export function detectPlatformByUrl(inputUrl, platformInput = "auto") {
   const forced = normalizePlatform(platformInput);
   if (forced !== "auto") return forced;
-  const { host } = sanitizeSiteUrl(inputUrl);
-  if (host.endsWith(".pixnet.net") || host.endsWith(".pixnet.cc") || host === "pixnet.net") {
+  const { hostname } = sanitizeSiteUrl(inputUrl);
+  if (hostname.endsWith(".pixnet.net") || hostname.endsWith(".pixnet.cc") || hostname === "pixnet.net") {
     return "pixnet";
   }
   return "wordpress";
@@ -161,7 +162,7 @@ export async function fetchWpComItems(host, postType = "post", fetchImpl = fetch
 
 export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch, resolver = dns.lookup) {
   await assertSafeExtractionTarget(inputUrl, resolver);
-  const { baseUrl, host } = sanitizeSiteUrl(inputUrl);
+  const { baseUrl, hostname } = sanitizeSiteUrl(inputUrl);
   let posts = [];
   let pages = [];
   let wpV2Error = null;
@@ -174,8 +175,8 @@ export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch, resolver 
   }
 
   if (posts.length === 0 && pages.length === 0) {
-    const wpcomPosts = await fetchWpComItems(host, "post", fetchImpl);
-    const wpcomPages = await fetchWpComItems(host, "page", fetchImpl);
+    const wpcomPosts = await fetchWpComItems(hostname, "post", fetchImpl);
+    const wpcomPages = await fetchWpComItems(hostname, "page", fetchImpl);
     posts = [...wpcomPosts, ...wpcomPages];
   }
 
@@ -189,13 +190,13 @@ export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch, resolver 
 }
 
 export function parsePixnetIdentity(inputUrl) {
-  const { host } = sanitizeSiteUrl(inputUrl);
+  const { hostname } = sanitizeSiteUrl(inputUrl);
   const url = new URL(inputUrl);
   const queryUser = String(url.searchParams.get("user") || "").trim();
   if (queryUser) return queryUser;
 
-  if (host.endsWith(".pixnet.net")) {
-    const subdomain = host.slice(0, -".pixnet.net".length);
+  if (hostname.endsWith(".pixnet.net")) {
+    const subdomain = hostname.slice(0, -".pixnet.net".length);
     const reserved = new Set(["www", "m", "static", "api"]);
     if (subdomain && !reserved.has(subdomain)) {
       return subdomain;
@@ -204,7 +205,7 @@ export function parsePixnetIdentity(inputUrl) {
 
   const seg = url.pathname.split("/").filter(Boolean);
   const userFromPath = seg[0];
-  if (host === "pixnet.net" && userFromPath) {
+  if (hostname === "pixnet.net" && userFromPath) {
     const reservedPaths = new Set([
       "blog",
       "mainpage",
