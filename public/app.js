@@ -4,11 +4,7 @@ const state = {
   parsedRawSource: null,
   xmlZipBlob: null,
   skillMarkdown: "",
-  knowledgeMarkdown: "",
-  personaMarkdown: "",
-  meta: null,
-  wikiMarkdown: "",
-  activeOutput: "skill"
+  wikiMarkdown: ""
 };
 
 const el = {
@@ -77,7 +73,6 @@ function switchSource(mode) {
 }
 
 function switchOutputTab(tab) {
-  state.activeOutput = tab;
   el.tabSkill.classList.toggle("active", tab === "skill");
   el.tabWiki.classList.toggle("active", tab === "wiki");
 
@@ -140,9 +135,8 @@ async function parseFromUrl() {
 }
 
 function renderStats(items, metadata) {
-  el.stats.classList.remove("hidden");
   const sample = items[0]?.title ? `Latest title: ${items[0].title}` : "No title available.";
-  el.stats.textContent = `Parsed ${metadata.itemCount} entries. ${sample}`;
+  showStats(`Parsed ${metadata.itemCount} entries. ${sample}`);
 }
 
 function downloadText(filename, content) {
@@ -167,6 +161,23 @@ function downloadBlob(filename, blob, type = "application/octet-stream") {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function resetXmlConversionState() {
+  state.xmlZipBlob = null;
+  state.parsedRawSource = null;
+  el.downloadXmlBtn.disabled = true;
+  hideStats();
+}
+
+function showStats(message) {
+  el.stats.textContent = message;
+  el.stats.classList.remove("hidden");
+}
+
+function hideStats() {
+  el.stats.textContent = "";
+  el.stats.classList.add("hidden");
 }
 
 async function convertFromXml() {
@@ -202,6 +213,7 @@ async function convertFromXml() {
 async function handleParse() {
   try {
     if (state.sourceMode === "xml") {
+      resetXmlConversionState();
       setStatus("Converting XML export...", { isLoading: true });
       const converted = await convertFromXml();
       state.xmlZipBlob = converted.blob;
@@ -211,12 +223,13 @@ async function handleParse() {
       el.saveBtn.disabled = true;
       el.downloadXmlBtn.disabled = !state.xmlZipBlob;
       const summary = converted.metadata || {};
-      el.stats.classList.remove("hidden");
       const firstWarningText = summary.firstWarning || "";
       const firstWarning = firstWarningText
         ? ` First warning: ${firstWarningText}`
         : "";
-      el.stats.textContent = `Converted ${summary.convertedItems || 0}/${summary.totalItems || 0} items, skipped ${summary.skippedItems || 0}, warnings ${summary.warningCount || 0}.${firstWarning}`;
+      showStats(
+        `Converted ${summary.convertedItems || 0}/${summary.totalItems || 0} items, skipped ${summary.skippedItems || 0}, warnings ${summary.warningCount || 0}.${firstWarning}`
+      );
       setStatus("XML conversion completed. Download the ZIP for Obsidian import.");
       return;
     }
@@ -234,6 +247,9 @@ async function handleParse() {
     el.downloadXmlBtn.disabled = true;
     setStatus(`Parsed ${state.items.length} items. Ready to generate.`);
   } catch (error) {
+    if (state.sourceMode === "xml") {
+      resetXmlConversionState();
+    }
     setStatus(error.message, { isError: true });
   }
 }
@@ -258,9 +274,6 @@ async function handleGenerate() {
     });
 
     state.skillMarkdown = response.skillMarkdown || "";
-    state.knowledgeMarkdown = response.knowledgeMarkdown || "";
-    state.personaMarkdown = response.personaMarkdown || "";
-    state.meta = response.meta || null;
     state.wikiMarkdown = mode === "both" ? response.wikiMarkdown || "" : "";
     switchOutputTab("skill");
 
