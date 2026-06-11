@@ -121,6 +121,35 @@ export async function listBlobPrefix(prefix, listImpl = blobDeps.listImpl) {
   return result.blobs ?? [];
 }
 
+function idempotencyPath(recordKey) {
+  return `idempotency/${recordKey}.json`;
+}
+
+function idempotencyLocalPath(recordKey) {
+  return path.join(PROFILE_ROOT, ".idempotency", `${recordKey}.json`);
+}
+
+export async function readIdempotencyRecord(recordKey) {
+  if (blobEnabled()) {
+    const raw = await readBlob(idempotencyPath(recordKey));
+    return parseJson(raw, null);
+  }
+
+  const raw = await fs.readFile(idempotencyLocalPath(recordKey), "utf8");
+  return parseJson(raw, null);
+}
+
+export async function writeIdempotencyRecord(recordKey, payload) {
+  if (blobEnabled()) {
+    await writeBlob(idempotencyPath(recordKey), json(payload));
+    return;
+  }
+
+  const target = idempotencyLocalPath(recordKey);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, json(payload), "utf8");
+}
+
 function profilePath(slug, file) {
   return `profiles/${slug}/${file}`;
 }

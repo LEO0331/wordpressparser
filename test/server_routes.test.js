@@ -6,6 +6,7 @@ import path from "node:path";
 process.env.VERCEL = "1";
 process.env.ADMIN_API_KEY = "secret-key";
 const { default: app, handleConvertXmlRequest } = await import("../server.js");
+const { readNormalizedItems } = await import("../src/profile_store.js");
 
 function getRouteHandlers(appInstance, method, path) {
   const layer = appInstance._router?.stack?.find(
@@ -41,6 +42,13 @@ function createRes() {
       return this;
     }
   };
+}
+
+function reqGet(headers = {}) {
+  const normalized = new Map(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])
+  );
+  return (name) => normalized.get(String(name).toLowerCase()) || "";
 }
 
 const testSlug = "route-profile";
@@ -416,6 +424,193 @@ test("/api/profiles/save validates missing items", async () => {
   await invokeRoute(app, "post", "/api/profiles/save", { body: { items: [] } }, res);
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.error, "No items to save.");
+});
+
+test("profile save idempotency returns cached response and rejects key body mismatch", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await fs.rm(testProfileDir, { recursive: true, force: true });
+  await fs.rm(path.resolve(process.cwd(), "profiles", ".idempotency"), { recursive: true, force: true });
+
+  const body = {
+    slug: testSlug,
+    name: "Route User",
+    items: [
+      {
+        title: "A",
+        content: "alpha beta gamma",
+        date: "2026-04-14",
+        url: "https://example.com/a",
+        categories: [],
+        tags: []
+      }
+    ],
+    options: { language: "en", mode: "parser" }
+  };
+  const firstRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/save",
+    { body, get: reqGet({ "idempotency-key": "save-key-0001" }) },
+    firstRes
+  );
+  assert.equal(firstRes.statusCode, 200);
+
+  const secondRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/save",
+    { body, get: reqGet({ "idempotency-key": "save-key-0001" }) },
+    secondRes
+  );
+  assert.equal(secondRes.statusCode, 200);
+  assert.deepEqual(secondRes.body.storage, firstRes.body.storage);
+
+  const versionsRes = createRes();
+  await invokeRoute(app, "get", "/api/profiles/:slug", { params: { slug: testSlug } }, versionsRes);
+  assert.equal(versionsRes.statusCode, 200);
+  assert.equal(versionsRes.body.versions.length, 0);
+
+  const conflictRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/save",
+    {
+      body: { ...body, name: "Different User" },
+      get: reqGet({ "idempotency-key": "save-key-0001" })
+    },
+    conflictRes
+  );
+  assert.equal(conflictRes.statusCode, 409);
+  assert.equal(conflictRes.body.error, "Idempotency key reused with a different request.");
+
+  await fs.rm(testProfileDir, { recursive: true, force: true });
+});
+
+test("profile correction idempotency prevents duplicate correction logs", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await fs.rm(testProfileDir, { recursive: true, force: true });
+  await fs.rm(path.resolve(process.cwd(), "profiles", ".idempotency"), { recursive: true, force: true });
+
+  const saveRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/save",
+    {
+      body: {
+        slug: testSlug,
+        name: "Route User",
+        items: [
+          {
+            title: "Seed",
+            content: "seed content",
+            date: "2026-04-14",
+            url: "https://example.com/seed",
+            categories: [],
+            tags: []
+          }
+        ],
+        options: { language: "en", mode: "parser" }
+      }
+    },
+    saveRes
+  );
+  assert.equal(saveRes.statusCode, 200);
+
+  const correctionReq = {
+    params: { slug: testSlug },
+    body: { scope: "persona", correction: "be concise" },
+    get: reqGet({
+      "x-admin-key": "secret-key",
+      "idempotency-key": "correct-key-0001"
+    })
+  };
+  const firstRes = createRes();
+  await invokeRoute(app, "post", "/api/profiles/:slug/correct", correctionReq, firstRes);
+  assert.equal(firstRes.statusCode, 200);
+
+  const secondRes = createRes();
+  await invokeRoute(app, "post", "/api/profiles/:slug/correct", correctionReq, secondRes);
+  assert.equal(secondRes.statusCode, 200);
+  assert.deepEqual(secondRes.body, firstRes.body);
+
+  const readRes = createRes();
+  await invokeRoute(app, "get", "/api/profiles/:slug", { params: { slug: testSlug } }, readRes);
+  assert.equal(readRes.statusCode, 200);
+  assert.equal(readRes.body.meta.corrections_count, 1);
+  assert.equal(readRes.body.personaMarkdown.match(/be concise/g)?.length, 1);
+  assert.equal(readRes.body.versions.length, 2);
+
+  await fs.rm(testProfileDir, { recursive: true, force: true });
+});
+
+test("profile update idempotency prevents duplicate merged items", async () => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await fs.rm(testProfileDir, { recursive: true, force: true });
+  await fs.rm(path.resolve(process.cwd(), "profiles", ".idempotency"), { recursive: true, force: true });
+
+  const saveRes = createRes();
+  await invokeRoute(
+    app,
+    "post",
+    "/api/profiles/save",
+    {
+      body: {
+        slug: testSlug,
+        name: "Route User",
+        items: [
+          {
+            title: "Seed",
+            content: "seed content",
+            date: "2026-04-14",
+            url: "https://example.com/seed",
+            categories: [],
+            tags: []
+          }
+        ],
+        options: { language: "en", mode: "parser" }
+      }
+    },
+    saveRes
+  );
+  assert.equal(saveRes.statusCode, 200);
+
+  const updateReq = {
+    params: { slug: testSlug },
+    body: {
+      items: [
+        {
+          title: "Update",
+          content: "update content",
+          date: "2026-04-15",
+          url: "https://example.com/update",
+          categories: [],
+          tags: []
+        }
+      ],
+      options: { language: "en", mode: "parser" }
+    },
+    get: reqGet({
+      "x-admin-key": "secret-key",
+      "idempotency-key": "update-key-0001"
+    })
+  };
+  const firstRes = createRes();
+  await invokeRoute(app, "post", "/api/profiles/:slug/update", updateReq, firstRes);
+  assert.equal(firstRes.statusCode, 200);
+
+  const secondRes = createRes();
+  await invokeRoute(app, "post", "/api/profiles/:slug/update", updateReq, secondRes);
+  assert.equal(secondRes.statusCode, 200);
+  assert.deepEqual(secondRes.body.storage, firstRes.body.storage);
+
+  const normalizedItems = await readNormalizedItems(testSlug);
+  assert.deepEqual(normalizedItems.map((item) => item.title), ["Seed", "Update"]);
+
+  await fs.rm(testProfileDir, { recursive: true, force: true });
 });
 
 test("admin update returns 400 when merged data is empty", async () => {
