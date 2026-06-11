@@ -23,9 +23,22 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const ADMIN_API_KEY = String(process.env.ADMIN_API_KEY || "").trim();
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const API_VERSION = "2026-06-11";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
+
+app.use((req, res, next) => {
+  const inboundRequestId = String(req.get?.("x-request-id") || "").trim();
+  const requestId = /^req_[a-zA-Z0-9_-]{8,80}$/.test(inboundRequestId)
+    ? inboundRequestId
+    : `req_${crypto.randomUUID().replace(/-/g, "")}`;
+  req.requestId = requestId;
+  res.locals.requestId = requestId;
+  res.setHeader("Request-Id", requestId);
+  res.setHeader("API-Version", API_VERSION);
+  next();
+});
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.static(publicDir));
@@ -39,12 +52,58 @@ export function sendSafeError(res, {
   status = 500,
   message = "Internal server error.",
   context = "server",
-  error
+  error,
+  type,
+  code,
+  param
 }) {
   if (error) {
     logServerError(context, error);
   }
-  return res.status(status).json({ error: message });
+  return sendApiError(res, { status, message, type, code: code || context, param });
+}
+
+function errorTypeForStatus(status) {
+  if (status === 401) return "authentication_error";
+  if (status === 403) return "authorization_error";
+  if (status === 404) return "not_found_error";
+  if (status === 409) return "idempotency_error";
+  if (status === 429) return "rate_limit_error";
+  if (status >= 500) return "api_error";
+  return "invalid_request_error";
+}
+
+function responseRequestId(res) {
+  if (!res.locals) res.locals = {};
+  if (!res.locals.requestId) {
+    res.locals.requestId = `req_${crypto.randomUUID().replace(/-/g, "")}`;
+  }
+  if (typeof res.setHeader === "function") {
+    res.setHeader("Request-Id", res.locals.requestId);
+    res.setHeader("API-Version", API_VERSION);
+  }
+  return res.locals.requestId;
+}
+
+function sendApiError(res, {
+  status = 400,
+  message,
+  type,
+  code,
+  param
+}) {
+  const requestId = responseRequestId(res);
+  return res.status(status).json({
+    error: message,
+    request_id: requestId,
+    error_details: {
+      type: type || errorTypeForStatus(status),
+      code: code || "invalid_request",
+      message,
+      ...(param ? { param } : {}),
+      request_id: requestId
+    }
+  });
 }
 
 export function readAdminKey(req) {
@@ -120,7 +179,13 @@ function withIdempotency({ route, getSlug }, handler) {
       const existing = await readIdempotencyRecord(recordKey).catch(() => null);
       if (existing && isFreshIdempotencyRecord(existing)) {
         if (existing.requestHash !== requestHash) {
-          return res.status(409).json({ error: "Idempotency key reused with a different request." });
+          logServerError("idempotency", new Error(`Key collision on ${route}/${slug}`));
+          return sendApiError(res, {
+            status: 409,
+            type: "idempotency_error",
+            code: "idempotency_key_reused_with_different_params",
+            message: "Idempotency key reused with a different request."
+          });
         }
         return res.status(existing.status).json(existing.response);
       }
@@ -195,7 +260,14 @@ app.post("/api/extract-url", async (req, res) => {
   try {
     const url = req.body?.url;
     const platform = req.body?.platform ?? "auto";
-    if (!url) return res.status(400).json({ error: "Missing url" });
+    if (!url) {
+      return sendApiError(res, {
+        status: 400,
+        code: "missing_required_param",
+        message: "Missing url",
+        param: "url"
+      });
+    }
     const items = await fetchByUrl(url, platform);
     res.json({
       items,
@@ -258,7 +330,12 @@ app.post("/api/analyze", (req, res) => {
     const items = req.body?.items;
     const options = req.body?.options ?? {};
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "No items to analyze." });
+      return sendApiError(res, {
+        status: 400,
+        code: "missing_required_param",
+        message: "No items to analyze.",
+        param: "items"
+      });
     }
     const result = analyzeCorpus(items, options);
     res.json(result);
@@ -280,7 +357,12 @@ app.post("/api/build", async (req, res) => {
     const options = req.body?.options ?? {};
 
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "No items to build from." });
+      return sendApiError(res, {
+        status: 400,
+        code: "missing_required_param",
+        message: "No items to build from.",
+        param: "items"
+      });
     }
 
     const artifacts = await buildProfileArtifacts({
@@ -311,7 +393,12 @@ app.post(
       const rawSource = req.body?.rawSource;
 
       if (!Array.isArray(items) || items.length === 0) {
-        return res.status(400).json({ error: "No items to save." });
+        return sendApiError(res, {
+          status: 400,
+          code: "missing_required_param",
+          message: "No items to save.",
+          param: "items"
+        });
       }
 
       const artifacts = await buildProfileArtifacts({
@@ -349,10 +436,26 @@ app.post(
   })
 );
 
-app.get("/api/profiles", async (_req, res) => {
+app.get("/api/profiles", async (req, res) => {
   try {
     const profiles = await listProfiles();
-    res.json({ profiles });
+    const limitInput = Number(req.query?.limit ?? 100);
+    const limit = Number.isFinite(limitInput)
+      ? Math.min(Math.max(Math.trunc(limitInput), 1), 100)
+      : 100;
+    const startingAfter = String(req.query?.starting_after || "").trim();
+    const startIndex = startingAfter
+      ? profiles.findIndex((profile) => profile.slug === startingAfter) + 1
+      : 0;
+    const safeStartIndex = startIndex > 0 ? startIndex : 0;
+    const page = profiles.slice(safeStartIndex, safeStartIndex + limit);
+    res.json({
+      object: "list",
+      data: page,
+      profiles: page,
+      has_more: safeStartIndex + limit < profiles.length,
+      url: "/api/profiles"
+    });
   } catch (error) {
     sendSafeError(res, {
       status: 500,
@@ -399,7 +502,12 @@ app.post(
 
       const merged = [...baseItems, ...(Array.isArray(incomingItems) ? incomingItems : [])];
       if (!merged.length) {
-        return res.status(400).json({ error: "No profile data to update." });
+        return sendApiError(res, {
+          status: 400,
+          code: "missing_required_param",
+          message: "No profile data to update.",
+          param: "items"
+        });
       }
 
       const prior = await readProfile(slug);
@@ -446,7 +554,14 @@ app.post(
       const slug = toSlug(req.params.slug);
       const correction = String(req.body?.correction || "").trim();
       const scope = String(req.body?.scope || "persona");
-      if (!correction) return res.status(400).json({ error: "Missing correction text." });
+      if (!correction) {
+        return sendApiError(res, {
+          status: 400,
+          code: "missing_required_param",
+          message: "Missing correction text.",
+          param: "correction"
+        });
+      }
       const result = await applyProfileCorrection(slug, scope, correction);
       res.json(result);
     } catch (error) {
@@ -467,7 +582,14 @@ app.post(
     try {
       const slug = toSlug(req.params.slug);
       const version = req.body?.version;
-      if (!version) return res.status(400).json({ error: "Missing version." });
+      if (!version) {
+        return sendApiError(res, {
+          status: 400,
+          code: "missing_required_param",
+          message: "Missing version.",
+          param: "version"
+        });
+      }
       const result = await rollbackProfileStore(slug, version);
       res.json(result);
     } catch (error) {
@@ -486,7 +608,12 @@ app.post("/api/generate", async (req, res) => {
     const items = req.body?.items;
     const options = req.body?.options ?? {};
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "No items to generate from." });
+      return sendApiError(res, {
+        status: 400,
+        code: "missing_required_param",
+        message: "No items to generate from.",
+        param: "items"
+      });
     }
     const artifacts = await generateArtifacts(items, options);
     res.json(artifacts);

@@ -12,6 +12,12 @@ function createRes() {
   return {
     statusCode: 200,
     body: null,
+    headers: {},
+    locals: {},
+    setHeader(name, value) {
+      this.headers[String(name).toLowerCase()] = value;
+      return this;
+    },
     status(code) {
       this.statusCode = code;
       return this;
@@ -46,6 +52,11 @@ test("sendSafeError writes status and body", () => {
   sendSafeError(res, { status: 418, message: "tea", context: "ctx" });
   assert.equal(res.statusCode, 418);
   assert.equal(res.body.error, "tea");
+  assert.match(res.body.request_id, /^req_/);
+  assert.equal(res.headers["request-id"], res.body.request_id);
+  assert.equal(res.headers["api-version"], "2026-06-11");
+  assert.equal(res.body.error_details.type, "invalid_request_error");
+  assert.equal(res.body.error_details.code, "ctx");
 });
 
 test("logServerError calls console.error", () => {

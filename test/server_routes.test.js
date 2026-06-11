@@ -33,6 +33,12 @@ function createRes() {
   return {
     statusCode: 200,
     body: null,
+    headers: {},
+    locals: {},
+    setHeader(name, value) {
+      this.headers[String(name).toLowerCase()] = value;
+      return this;
+    },
     status(code) {
       this.statusCode = code;
       return this;
@@ -85,6 +91,9 @@ test("/api/extract-url with missing url returns 400", async () => {
   await invokeRoute(app, "post", "/api/extract-url", req, res);
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.error, "Missing url");
+  assert.equal(res.body.error_details.code, "missing_required_param");
+  assert.equal(res.body.error_details.param, "url");
+  assert.match(res.body.request_id, /^req_/);
 });
 
 test("/api/extract-url supports pixnet platform parameter", async () => {
@@ -398,8 +407,18 @@ test("/api/profiles/save -> list -> read flow works", async () => {
   const listRes = createRes();
   await invokeRoute(app, "get", "/api/profiles", {}, listRes);
   assert.equal(listRes.statusCode, 200);
+  assert.equal(listRes.body.object, "list");
+  assert.deepEqual(listRes.body.data, listRes.body.profiles);
+  assert.equal(typeof listRes.body.has_more, "boolean");
+  assert.equal(listRes.body.url, "/api/profiles");
   assert.ok(Array.isArray(listRes.body.profiles));
   assert.ok(listRes.body.profiles.some((x) => x.slug === testSlug));
+
+  const pagedListRes = createRes();
+  await invokeRoute(app, "get", "/api/profiles", { query: { limit: "1" } }, pagedListRes);
+  assert.equal(pagedListRes.statusCode, 200);
+  assert.ok(pagedListRes.body.profiles.length <= 1);
+  assert.deepEqual(pagedListRes.body.data, pagedListRes.body.profiles);
 
   const readReq = { params: { slug: testSlug } };
   const readRes = createRes();
@@ -485,6 +504,8 @@ test("profile save idempotency returns cached response and rejects key body mism
   );
   assert.equal(conflictRes.statusCode, 409);
   assert.equal(conflictRes.body.error, "Idempotency key reused with a different request.");
+  assert.equal(conflictRes.body.error_details.type, "idempotency_error");
+  assert.equal(conflictRes.body.error_details.code, "idempotency_key_reused_with_different_params");
 
   await fs.rm(testProfileDir, { recursive: true, force: true });
 });

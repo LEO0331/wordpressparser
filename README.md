@@ -69,6 +69,24 @@ Recommended project settings:
 
 ## API
 
+All JSON responses include a `Request-Id` response header and `API-Version: 2026-06-11`.
+
+Error responses keep the legacy top-level `error` string and also include a structured envelope:
+
+```json
+{
+  "error": "Missing url",
+  "request_id": "req_...",
+  "error_details": {
+    "type": "invalid_request_error",
+    "code": "missing_required_param",
+    "message": "Missing url",
+    "param": "url",
+    "request_id": "req_..."
+  }
+}
+```
+
 - `POST /api/normalize`
   - body: `{ "data": <wordpress_json> }`
 - `POST /api/extract-url`
@@ -84,6 +102,8 @@ Recommended project settings:
 - `POST /api/profiles/save`
   - body: same as build, persists artifacts under `profiles/{slug}/`
 - `GET /api/profiles`
+  - query: `limit=1..100`, `starting_after=<profile_slug>`
+  - response: `{ "object": "list", "data": [...], "profiles": [...], "has_more": false, "url": "/api/profiles" }`
 - `GET /api/profiles/:slug`
 - `POST /api/profiles/:slug/update`
   - body: `{ "items": [...], "options": { ... } }`
@@ -98,6 +118,13 @@ Admin-only endpoints:
 - `/api/profiles/:slug/rollback`
 
 Set `ADMIN_API_KEY` and send either `x-admin-key: <key>` or `Authorization: Bearer <key>`.
+
+Mutation idempotency:
+- Supported on `/api/profiles/save`, `/api/profiles/:slug/update`, `/api/profiles/:slug/correct`, and `/api/profiles/:slug/rollback`.
+- Send `Idempotency-Key: <client-generated-key>` for safe retries.
+- Same key + same route/slug/body returns the cached response.
+- Same key + different body returns `409`.
+- Records are retained for 24 hours.
 
 ## Node utilities
 
