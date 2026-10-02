@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.3.3",
-    "express": "^4.22.2",
+    "express": "^4.22.3",
     "fast-xml-parser": "^5.8.0"
   },
   "devDependencies": {
