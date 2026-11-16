@@ -2,6 +2,9 @@ import { collectCorpusStats } from "./parser.js";
 import { buildSkillMarkdown } from "./skill_template.js";
 
 const LANGUAGE_WHITELIST = new Set(["en", "zh-TW", "auto"]);
+const MODEL_TIMEOUT_MS = 20_000;
+const MAX_MODEL_INPUT_BYTES = 64 * 1024;
+const MAX_MODEL_OUTPUT_TOKENS = 4096;
 const LOCALE = {
   en: {
     knowledgeIntro: "This section captures knowledge priorities distilled from WordPress sources.",
@@ -375,10 +378,11 @@ function extractResponseText(responseJson) {
 
 async function callModel(prompt) {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey || Buffer.byteLength(prompt, "utf8") > MAX_MODEL_INPUT_BYTES) return null;
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
@@ -386,14 +390,16 @@ async function callModel(prompt) {
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      input: prompt
+      input: prompt,
+      max_output_tokens: MAX_MODEL_OUTPUT_TOKENS
     })
   });
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Model request failed (${response.status}): ${errorText}`);
+    await response.body?.cancel();
+    return null;
   }
   const body = await response.json();
+  if (body?.status !== "completed") return null;
   return extractResponseText(body);
 }
 

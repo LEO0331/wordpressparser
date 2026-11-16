@@ -5,7 +5,7 @@ import path from "node:path";
 
 process.env.VERCEL = "1";
 process.env.ADMIN_API_KEY = "secret-key";
-const { default: app, handleConvertXmlRequest } = await import("../server.js");
+const { default: app, handleConvertXmlRequest, handleExtractUrlRequest } = await import("../server.js");
 const { readNormalizedItems } = await import("../src/profile_store.js");
 
 function getRouteHandlers(appInstance, method, path) {
@@ -57,6 +57,7 @@ function reqGet(headers = {}) {
   return (name) => normalized.get(String(name).toLowerCase()) || "";
 }
 
+const adminHeaders = reqGet({ "x-admin-key": "secret-key" });
 const testSlug = "route-profile";
 const testProfileDir = path.resolve(process.cwd(), "profiles", testSlug);
 
@@ -97,71 +98,16 @@ test("/api/extract-url with missing url returns 400", async () => {
 });
 
 test("/api/extract-url supports pixnet platform parameter", async () => {
-  const oldFetch = global.fetch;
-  global.fetch = async (url) => {
-    const u = String(url);
-    if (u.startsWith("https://emma.pixnet.cc/blog/articles")) {
-      return {
-        ok: false,
-        status: 404,
-        async text() {
-          return JSON.stringify({ error: "not found" });
-        }
-      };
-    }
-    if (u.startsWith("https://emma.pixnet.cc/mainpage/blog/articles") && u.includes("page=1")) {
-      return {
-        ok: true,
-        status: 200,
-        async text() {
-          return JSON.stringify({
-            articles: [
-              {
-                title: "PIXNET Route",
-                body: "<p>pixnet body</p>",
-                link: "https://alice.pixnet.net/blog/post/1",
-                public_at: "2026-04-14"
-              }
-            ]
-          });
-        }
-      };
-    }
-    if (u.startsWith("https://emma.pixnet.cc/mainpage/blog/articles")) {
-      return {
-        ok: true,
-        status: 200,
-        async text() {
-          return JSON.stringify({ articles: [] });
-        }
-      };
-    }
-    return {
-      ok: false,
-      status: 404,
-      async text() {
-        return JSON.stringify({ error: "unexpected" });
-      }
-    };
-  };
-
-  const req = {
-    body: {
-      url: "https://alice.pixnet.net/blog",
-      platform: "pixnet"
-    }
-  };
+  const url = "https://alice.pixnet.net/blog";
   const res = createRes();
-
-  try {
-    await invokeRoute(app, "post", "/api/extract-url", req, res);
-    assert.equal(res.statusCode, 200);
-    assert.ok(Array.isArray(res.body.items));
-    assert.equal(res.body.items.length, 1);
-    assert.equal(res.body.items[0].title, "PIXNET Route");
-  } finally {
-    global.fetch = oldFetch;
-  }
+  await handleExtractUrlRequest({ body: { url, platform: "pixnet" } }, res, async (input, platform) => {
+    assert.equal(input, url);
+    assert.equal(platform, "pixnet");
+    return [{ title: "PIXNET Route" }];
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.metadata.itemCount, 1);
+  assert.equal(res.body.items[0].title, "PIXNET Route");
 });
 
 test("/api/extract-url returns generic error text for invalid url", async () => {
@@ -294,7 +240,7 @@ test("GET / returns index file", async () => {
     }
   };
   await invokeRoute(app, "get", "/", req, res);
-  assert.ok(String(res.sentFile).endsWith("/public/index.html"));
+  assert.ok(String(res.sentFile).endsWith(path.join("public", "index.html")));
 });
 
 test("/api/analyze validates empty items and analyzes valid payload", async () => {
@@ -404,8 +350,15 @@ test("/api/profiles/save -> list -> read flow works", async () => {
   assert.equal(saveRes.statusCode, 200);
   assert.equal(saveRes.body.storage.slug, testSlug);
 
+  const duplicateRes = createRes();
+  await invokeRoute(app, "post", "/api/profiles/save", {
+    body: { ...saveReq.body, name: "Another User" }
+  }, duplicateRes);
+  assert.equal(duplicateRes.statusCode, 409);
+  assert.equal(duplicateRes.body.error_details.code, "profile_already_exists");
+
   const listRes = createRes();
-  await invokeRoute(app, "get", "/api/profiles", {}, listRes);
+  await invokeRoute(app, "get", "/api/profiles", { get: adminHeaders }, listRes);
   assert.equal(listRes.statusCode, 200);
   assert.equal(listRes.body.object, "list");
   assert.deepEqual(listRes.body.data, listRes.body.profiles);
@@ -415,23 +368,46 @@ test("/api/profiles/save -> list -> read flow works", async () => {
   assert.ok(listRes.body.profiles.some((x) => x.slug === testSlug));
 
   const pagedListRes = createRes();
-  await invokeRoute(app, "get", "/api/profiles", { query: { limit: "1" } }, pagedListRes);
+  await invokeRoute(app, "get", "/api/profiles", { get: adminHeaders, query: { limit: "1" } }, pagedListRes);
   assert.equal(pagedListRes.statusCode, 200);
   assert.ok(pagedListRes.body.profiles.length <= 1);
   assert.deepEqual(pagedListRes.body.data, pagedListRes.body.profiles);
 
-  const readReq = { params: { slug: testSlug } };
+  const readReq = { get: adminHeaders, params: { slug: testSlug } };
   const readRes = createRes();
   await invokeRoute(app, "get", "/api/profiles/:slug", readReq, readRes);
   assert.equal(readRes.statusCode, 200);
   assert.equal(readRes.body.slug, testSlug);
+  assert.equal(readRes.body.meta.name, "Route User");
+  assert.equal(readRes.headers["cache-control"], "no-store");
   assert.ok(Array.isArray(readRes.body.versions));
 
   await fs.rm(testProfileDir, { recursive: true, force: true });
 });
 
+test("profile list and detail require the admin key", async () => {
+  for (const route of ["/api/profiles", "/api/profiles/:slug"]) {
+    const res = createRes();
+    await invokeRoute(app, "get", route, { get: reqGet(), params: { slug: testSlug } }, res);
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.headers["cache-control"], "no-store");
+  }
+});
+
+test("idempotent save rejects JSON beyond the supported nesting limit", async () => {
+  let rawSource = {};
+  for (let depth = 0; depth < 65; depth += 1) rawSource = { nested: rawSource };
+  const res = createRes();
+  await invokeRoute(app, "post", "/api/profiles/save", {
+    body: { slug: testSlug, rawSource },
+    get: reqGet({ "Idempotency-Key": "depth-limit-check" })
+  }, res);
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error_details.code, "request_too_deep");
+});
+
 test("/api/profiles/:slug returns 404 for missing profile", async () => {
-  const req = { params: { slug: "missing-profile-slug" } };
+  const req = { get: adminHeaders, params: { slug: "missing-profile-slug" } };
   const res = createRes();
   await invokeRoute(app, "get", "/api/profiles/:slug", req, res);
   assert.equal(res.statusCode, 404);
@@ -487,7 +463,7 @@ test("profile save idempotency returns cached response and rejects key body mism
   assert.deepEqual(secondRes.body.storage, firstRes.body.storage);
 
   const versionsRes = createRes();
-  await invokeRoute(app, "get", "/api/profiles/:slug", { params: { slug: testSlug } }, versionsRes);
+  await invokeRoute(app, "get", "/api/profiles/:slug", { get: adminHeaders, params: { slug: testSlug } }, versionsRes);
   assert.equal(versionsRes.statusCode, 200);
   assert.equal(versionsRes.body.versions.length, 0);
 
@@ -559,7 +535,7 @@ test("profile correction idempotency prevents duplicate correction logs", async 
   assert.deepEqual(secondRes.body, firstRes.body);
 
   const readRes = createRes();
-  await invokeRoute(app, "get", "/api/profiles/:slug", { params: { slug: testSlug } }, readRes);
+  await invokeRoute(app, "get", "/api/profiles/:slug", { get: adminHeaders, params: { slug: testSlug } }, readRes);
   assert.equal(readRes.statusCode, 200);
   assert.equal(readRes.body.meta.corrections_count, 1);
   assert.equal(readRes.body.personaMarkdown.match(/be concise/g)?.length, 1);
@@ -783,7 +759,7 @@ test("admin protected update/correct/rollback works with key", async () => {
   assert.equal(correctRes.statusCode, 200);
 
   const readRes = createRes();
-  await invokeRoute(app, "get", "/api/profiles/:slug", { params: { slug: testSlug } }, readRes);
+  await invokeRoute(app, "get", "/api/profiles/:slug", { get: adminHeaders, params: { slug: testSlug } }, readRes);
   const version = readRes.body.versions[0];
   assert.ok(version);
 

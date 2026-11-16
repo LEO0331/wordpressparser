@@ -46,20 +46,24 @@ test("buildProfileArtifacts falls back to parser mode without API key", async ()
   if (oldKey) process.env.OPENAI_API_KEY = oldKey;
 });
 
-test("buildProfileArtifacts uses AI result when API call succeeds", async () => {
+test("buildProfileArtifacts uses a bounded AI request and reads the completed result", async (t) => {
   const oldKey = process.env.OPENAI_API_KEY;
   const oldFetch = global.fetch;
   process.env.OPENAI_API_KEY = "fake-key";
+  t.after(() => {
+    if (oldKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = oldKey;
+    global.fetch = oldFetch;
+  });
 
-  global.fetch = async () =>
-    ({
-      ok: true,
-      async json() {
-        return {
-          output_text: "# AI Skill\n\ncustom output"
-        };
-      }
-    });
+  let request;
+  global.fetch = async (_url, options) => {
+    request = options;
+    return new Response(JSON.stringify({
+      status: "completed",
+      output_text: "# AI Skill\n\ncustom output"
+    }));
+  };
 
   const artifacts = await buildProfileArtifacts({
     slug: "leo-ai",
@@ -71,10 +75,74 @@ test("buildProfileArtifacts uses AI result when API call succeeds", async () => 
   assert.equal(artifacts.metadata.modeUsed, "ai");
   assert.equal(artifacts.metadata.aiUsed, true);
   assert.ok(artifacts.skillMarkdown.includes("# AI Skill"));
+  assert.ok(request.signal instanceof AbortSignal);
+  assert.equal(JSON.parse(request.body).max_output_tokens, 4096);
+});
 
-  if (oldKey) process.env.OPENAI_API_KEY = oldKey;
-  else delete process.env.OPENAI_API_KEY;
-  global.fetch = oldFetch;
+test("buildProfileArtifacts keeps the parser output when the AI prompt exceeds its byte budget", async (t) => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  const oldFetch = global.fetch;
+  process.env.OPENAI_API_KEY = "fake-key";
+  t.after(() => {
+    if (oldKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = oldKey;
+    global.fetch = oldFetch;
+  });
+
+  let requests = 0;
+  global.fetch = async () => {
+    requests += 1;
+  };
+  const artifacts = await buildProfileArtifacts({
+    slug: "leo-ai",
+    name: "測".repeat(24_000),
+    items: sampleItems,
+    options: { mode: "ai", language: "en" }
+  });
+
+  assert.equal(requests, 0);
+  assert.equal(artifacts.metadata.aiUsed, false);
+  assert.ok(artifacts.skillMarkdown.includes("## PART A: Knowledge"));
+});
+
+test("buildProfileArtifacts keeps the parser output when the response body times out", async (t) => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  const oldFetch = global.fetch;
+  const oldTimeout = AbortSignal.timeout;
+  process.env.OPENAI_API_KEY = "fake-key";
+  t.after(() => {
+    if (oldKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = oldKey;
+    global.fetch = oldFetch;
+    AbortSignal.timeout = oldTimeout;
+  });
+
+  let timeout;
+  const controller = new AbortController();
+  AbortSignal.timeout = (ms) => {
+    timeout = ms;
+    return controller.signal;
+  };
+  global.fetch = async (_url, { signal }) => ({
+    ok: true,
+    async json() {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        controller.abort();
+      });
+    }
+  });
+
+  const artifacts = await buildProfileArtifacts({
+    slug: "leo-ai",
+    name: "Leo AI",
+    items: sampleItems,
+    options: { mode: "ai", language: "en" }
+  });
+
+  assert.equal(timeout, 20_000);
+  assert.equal(artifacts.metadata.aiUsed, false);
+  assert.ok(artifacts.skillMarkdown.includes("## PART A: Knowledge"));
 });
 
 test("generateArtifacts remains backward compatible", async () => {

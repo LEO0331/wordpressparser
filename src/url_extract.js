@@ -1,11 +1,43 @@
 import { normalizeWordPressData } from "./parser.js";
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 
 const MAX_PAGES = 20;
 const PAGE_SIZE = 100;
 const PLATFORM_VALUES = new Set(["auto", "wordpress", "pixnet"]);
-const BLOCKED_HOSTS = new Set(["localhost", "0.0.0.0", "::1"]);
+const MAX_REDIRECTS = 5;
+const EXTRACTION_TIMEOUT_MS = 30_000;
+const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
+const MAX_EXTRACTION_BYTES = 48 * 1024 * 1024;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+const nonPublicIPv4 = new net.BlockList();
+for (const [address, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+  ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
+  ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4]
+]) {
+  nonPublicIPv4.addSubnet(address, prefix);
+}
+
+const globalIPv6 = new net.BlockList();
+globalIPv6.addSubnet("2000::", 3, "ipv6");
+const nonPublicIPv6 = new net.BlockList();
+for (const [address, prefix] of [["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20]]) {
+  nonPublicIPv6.addSubnet(address, prefix, "ipv6");
+}
+
+const decoders = new Map([
+  ["gzip", createGunzip],
+  ["deflate", createInflate],
+  ["br", createBrotliDecompress]
+]);
 
 function parseJsonSafe(text) {
   if (!text) return null;
@@ -21,6 +53,9 @@ export function sanitizeSiteUrl(input) {
   if (!/^https?:$/.test(url.protocol)) {
     throw new Error("Only http/https URLs are supported.");
   }
+  if (url.username || url.password) {
+    throw new Error("URL credentials are not supported.");
+  }
   return {
     baseUrl: `${url.protocol}//${url.host}`,
     host: url.host,
@@ -28,79 +63,161 @@ export function sanitizeSiteUrl(input) {
   };
 }
 
-function parseIPv4(ip) {
-  const parts = ip.split(".");
-  if (parts.length !== 4) return null;
-  const nums = parts.map((x) => Number(x));
-  if (nums.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return null;
-  return nums;
-}
-
-function isPrivateIPv4(ip) {
-  const parts = parseIPv4(ip);
-  if (!parts) return false;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  if (a === 0) return true;
-  if (a >= 224) return true;
-  return false;
-}
-
-function isPrivateIPv6(ip) {
-  const normalized = String(ip || "").toLowerCase();
-  if (!normalized) return true;
-  if (normalized === "::" || normalized === "::1") return true;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
-  if (normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")) {
-    return true;
-  }
-  if (normalized.startsWith("::ffff:")) {
-    const mapped = normalized.slice("::ffff:".length);
-    return isPrivateIPv4(mapped);
-  }
-  return false;
-}
-
-function isPrivateAddress(address) {
-  const family = net.isIP(address);
-  if (family === 4) return isPrivateIPv4(address);
-  if (family === 6) return isPrivateIPv6(address);
-  return true;
-}
-
-async function resolveHostAddresses(host, resolver = dns.lookup) {
-  const results = await resolver(host, { all: true, verbatim: true });
-  if (!Array.isArray(results) || results.length === 0) {
-    throw new Error("No DNS records found for host.");
-  }
-  return results.map((x) => x.address).filter(Boolean);
-}
-
-export async function assertSafeExtractionTarget(inputUrl, resolver = dns.lookup) {
+async function resolvePublicAddresses(inputUrl, resolver) {
   const { hostname } = sanitizeSiteUrl(inputUrl);
-  const lowerHostname = hostname.toLowerCase();
-  if (BLOCKED_HOSTS.has(lowerHostname) || lowerHostname.endsWith(".localhost")) {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const rootlessHost = host.replace(/\.$/, "");
+  if (rootlessHost === "localhost" || rootlessHost.endsWith(".localhost")) {
     throw new Error("Target host is not allowed.");
   }
 
-  const ipFamily = net.isIP(lowerHostname);
-  if (ipFamily) {
-    if (isPrivateAddress(lowerHostname)) {
+  const records = net.isIP(host)
+    ? [{ address: host }]
+    : await resolver(host, { all: true, verbatim: true });
+  if (!Array.isArray(records) || records.length === 0) {
+    throw new Error("No DNS records found for host.");
+  }
+  return records.map(({ address }) => {
+    const family = net.isIP(address);
+    const isPublic = family === 4
+      ? !nonPublicIPv4.check(address)
+      : family === 6 && globalIPv6.check(address, "ipv6") && !nonPublicIPv6.check(address, "ipv6");
+    if (!isPublic) {
       throw new Error("Target host resolves to a private or local network address.");
     }
-    return;
+    return { address, family };
+  });
+}
+
+export async function assertSafeExtractionTarget(inputUrl, resolver = dns.lookup) {
+  await resolvePublicAddresses(inputUrl, resolver);
+}
+
+async function withDeadline(operation, signal) {
+  signal.throwIfAborted();
+  let abort;
+  const deadline = new Promise((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([operation(), deadline]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+async function readResponse(response, signal, remainingBytes) {
+  const limit = Math.min(MAX_RESPONSE_BYTES, remainingBytes);
+  const tooLarge = () => new Error("URL extraction response exceeds the size limit.");
+  if (Number(response.headers["content-length"]) > limit) {
+    response.destroy();
+    throw tooLarge();
+  }
+  const encoding = String(response.headers["content-encoding"] || "identity").trim().toLowerCase();
+  const decoder = decoders.get(encoding);
+  if (encoding !== "identity" && !decoder) {
+    response.destroy();
+    throw new Error("URL extraction response uses unsupported compression.");
+  }
+  const chunks = [];
+  let size = 0;
+  const streams = [response];
+  let wireBytes = 0;
+  if (decoder) {
+    streams.push(new Transform({
+      transform(chunk, _encoding, callback) {
+        wireBytes += chunk.length;
+        callback(wireBytes > limit ? tooLarge() : null, chunk);
+      }
+    }), decoder());
+  }
+  await pipeline(...streams, async (source) => {
+    for await (const chunk of source) {
+      size += chunk.length;
+      if (size > limit) throw tooLarge();
+      chunks.push(chunk);
+    }
+  }, { signal });
+  return { body: Buffer.concat(chunks, size), bytes: Math.max(size, wireBytes) };
+}
+
+async function requestExtractionPage(url, { lookup, signal, remainingBytes }) {
+  const client = url.protocol === "https:" ? https : http;
+  // Keep the URL hostname for Host, TLS SNI, and certificate checks.
+  const response = await new Promise((resolve, reject) => {
+    client.get(url, {
+      lookup,
+      signal,
+      agent: false,
+      autoSelectFamily: true,
+      headers: {
+        Accept: "*/*",
+        "Accept-Encoding": "gzip, deflate, br",
+        "User-Agent": "wordpress-parser"
+      }
+    }, resolve).once("error", reject);
+  });
+  const status = response.statusCode;
+  const ok = status >= 200 && status < 300;
+  const headers = { get: (header) => response.headers[header] };
+  if (!ok) {
+    response.destroy();
+    return { status, ok, headers };
+  }
+  const { body, bytes } = await readResponse(response, signal, remainingBytes);
+  return {
+    status,
+    ok,
+    headers,
+    bytes,
+    text: async () => body.toString("utf8"),
+    json: async () => JSON.parse(body.toString("utf8"))
+  };
+}
+
+function createExtractionFetcher(fetchImpl, resolver = dns.lookup) {
+  const signal = AbortSignal.timeout(EXTRACTION_TIMEOUT_MS);
+  const hosts = new Map();
+  let remainingBytes = MAX_EXTRACTION_BYTES;
+
+  async function validate(url) {
+    const { hostname } = sanitizeSiteUrl(url);
+    if (!hosts.has(hostname)) {
+      hosts.set(hostname, withDeadline(() => resolvePublicAddresses(url, resolver), signal));
+    }
+    return hosts.get(hostname);
   }
 
-  const addresses = await resolveHostAddresses(hostname, resolver);
-  if (addresses.some((x) => isPrivateAddress(x))) {
-    throw new Error("Target host resolves to a private or local network address.");
+  async function fetchPage(input) {
+    let url = new URL(input);
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      signal.throwIfAborted();
+      if (remainingBytes <= 0) {
+        throw new Error("URL extraction exceeded its total response size limit.");
+      }
+      const addresses = await validate(url);
+      const lookup = (_hostname, options, callback) => {
+        const family = Number(options.family) || 0;
+        const matching = family ? addresses.filter((record) => record.family === family) : addresses;
+        if (!matching.length) return callback(new Error("No validated address for this connection."));
+        if (options.all) return callback(null, matching);
+        return callback(null, matching[0].address, matching[0].family);
+      };
+      const res = fetchImpl
+        ? await fetchImpl(url.href, { redirect: "manual", lookup, signal })
+        : await requestExtractionPage(url, { lookup, signal, remainingBytes });
+      remainingBytes -= res.bytes ?? 0;
+      if (!REDIRECT_STATUSES.has(res.status)) return res;
+
+      const location = res.headers?.get("location");
+      if (hop === MAX_REDIRECTS || !location) {
+        throw new Error("URL extraction encountered an invalid redirect chain.");
+      }
+      url = new URL(location, url);
+    }
   }
+  return { fetchPage, validate };
 }
 
 export function normalizePlatform(platformInput) {
@@ -118,7 +235,7 @@ export function detectPlatformByUrl(inputUrl, platformInput = "auto") {
   return "wordpress";
 }
 
-export async function fetchWpRestItems(baseUrl, endpoint, fetchImpl = fetch) {
+export async function fetchWpRestItems(baseUrl, endpoint, fetchImpl = createExtractionFetcher().fetchPage) {
   const results = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
     const requestUrl = `${baseUrl}/wp-json/wp/v2/${endpoint}?per_page=${PAGE_SIZE}&page=${page}`;
@@ -129,13 +246,13 @@ export async function fetchWpRestItems(baseUrl, endpoint, fetchImpl = fetch) {
     }
     const body = await res.json();
     if (!Array.isArray(body) || body.length === 0) break;
-    results.push(...body);
+    results.push(...body.slice(0, PAGE_SIZE));
     if (body.length < PAGE_SIZE) break;
   }
   return results;
 }
 
-export async function fetchWpComItems(host, postType = "post", fetchImpl = fetch) {
+export async function fetchWpComItems(host, postType = "post", fetchImpl = createExtractionFetcher().fetchPage) {
   const items = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
     const endpoint = `https://public-api.wordpress.com/rest/v1.1/sites/${encodeURIComponent(host)}/posts`;
@@ -154,29 +271,30 @@ export async function fetchWpComItems(host, postType = "post", fetchImpl = fetch
     const body = await res.json();
     const posts = Array.isArray(body?.posts) ? body.posts : [];
     if (posts.length === 0) break;
-    items.push(...posts);
+    items.push(...posts.slice(0, PAGE_SIZE));
     if (posts.length < PAGE_SIZE) break;
   }
   return items;
 }
 
-export async function fetchWordPressByUrl(inputUrl, fetchImpl = fetch, resolver = dns.lookup) {
-  await assertSafeExtractionTarget(inputUrl, resolver);
+export async function fetchWordPressByUrl(inputUrl, fetchImpl, resolver) {
+  const { fetchPage, validate } = createExtractionFetcher(fetchImpl, resolver);
+  await validate(inputUrl);
   const { baseUrl, hostname } = sanitizeSiteUrl(inputUrl);
   let posts = [];
   let pages = [];
   let wpV2Error = null;
 
   try {
-    posts = await fetchWpRestItems(baseUrl, "posts", fetchImpl);
-    pages = await fetchWpRestItems(baseUrl, "pages", fetchImpl);
+    posts = await fetchWpRestItems(baseUrl, "posts", fetchPage);
+    pages = await fetchWpRestItems(baseUrl, "pages", fetchPage);
   } catch (error) {
     wpV2Error = error;
   }
 
   if (posts.length === 0 && pages.length === 0) {
-    const wpcomPosts = await fetchWpComItems(hostname, "post", fetchImpl);
-    const wpcomPages = await fetchWpComItems(hostname, "page", fetchImpl);
+    const wpcomPosts = await fetchWpComItems(hostname, "post", fetchPage);
+    const wpcomPages = await fetchWpComItems(hostname, "page", fetchPage);
     posts = [...wpcomPosts, ...wpcomPages];
   }
 
@@ -288,14 +406,15 @@ async function fetchPixnetByEndpoint(endpointBase, user, fetchImpl) {
 
     const articles = extractPixnetArticles(body);
     if (!Array.isArray(articles) || articles.length === 0) break;
-    items.push(...articles);
+    items.push(...articles.slice(0, PAGE_SIZE));
     if (articles.length < PAGE_SIZE) break;
   }
   return items;
 }
 
-export async function fetchPixnetByUrl(inputUrl, fetchImpl = fetch) {
+export async function fetchPixnetByUrl(inputUrl, fetchImpl, resolver) {
   const user = parsePixnetIdentity(inputUrl);
+  const { fetchPage } = createExtractionFetcher(fetchImpl, resolver);
   const endpoints = [
     "https://emma.pixnet.cc/blog/articles",
     "https://emma.pixnet.cc/mainpage/blog/articles"
@@ -304,7 +423,7 @@ export async function fetchPixnetByUrl(inputUrl, fetchImpl = fetch) {
   let lastError = null;
   for (const endpoint of endpoints) {
     try {
-      const articles = await fetchPixnetByEndpoint(endpoint, user, fetchImpl);
+      const articles = await fetchPixnetByEndpoint(endpoint, user, fetchPage);
       if (articles === null) continue;
       if (!articles.length) continue;
       return normalizeWordPressData({
@@ -321,10 +440,10 @@ export async function fetchPixnetByUrl(inputUrl, fetchImpl = fetch) {
   throw new Error("Unable to fetch PIXNET data from URL: no public articles found.");
 }
 
-export async function fetchByUrl(inputUrl, platformInput = "auto", fetchImpl = fetch) {
+export async function fetchByUrl(inputUrl, platformInput = "auto", fetchImpl, resolver) {
   const platform = detectPlatformByUrl(inputUrl, platformInput);
   if (platform === "pixnet") {
-    return fetchPixnetByUrl(inputUrl, fetchImpl);
+    return fetchPixnetByUrl(inputUrl, fetchImpl, resolver);
   }
-  return fetchWordPressByUrl(inputUrl, fetchImpl);
+  return fetchWordPressByUrl(inputUrl, fetchImpl, resolver);
 }

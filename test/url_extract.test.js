@@ -12,6 +12,8 @@ import {
   parsePixnetIdentity
 } from "../src/url_extract.js";
 
+const publicResolver = async () => [{ address: "93.184.216.34" }];
+
 function jsonResponse(status, payload) {
   return {
     ok: status >= 200 && status < 300,
@@ -69,7 +71,7 @@ test("fetchPixnetByUrl falls back endpoint and normalizes items", async () => {
     return jsonResponse(200, { articles: [] });
   };
 
-  const items = await fetchPixnetByUrl("https://alice.pixnet.net/blog", mockFetch);
+  const items = await fetchPixnetByUrl("https://alice.pixnet.net/blog", mockFetch, publicResolver);
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "PIXNET Post");
   assert.ok(items[0].content.includes("Hello PIXNET"));
@@ -97,7 +99,7 @@ test("fetchByUrl auto uses pixnet flow", async () => {
     return jsonResponse(200, { articles: [] });
   };
 
-  const items = await fetchByUrl("https://me.pixnet.net/blog", "auto", mockFetch);
+  const items = await fetchByUrl("https://me.pixnet.net/blog", "auto", mockFetch, publicResolver);
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "Post 1");
 });
@@ -135,7 +137,7 @@ test("fetchWordPressByUrl keeps wordpress path behavior", async () => {
 test("fetchPixnetByUrl raises actionable error if endpoints fail", async () => {
   const mockFetch = async () => jsonResponse(404, {});
   await assert.rejects(
-    () => fetchPixnetByUrl("https://charlie.pixnet.net/blog", mockFetch),
+    () => fetchPixnetByUrl("https://charlie.pixnet.net/blog", mockFetch, publicResolver),
     /Unable to fetch PIXNET data from URL/
   );
 });
@@ -166,6 +168,7 @@ test("sanitizeSiteUrl preserves baseUrl but separates hostname from port", () =>
 
 test("assertSafeExtractionTarget allows public literal IP", async () => {
   await assert.doesNotReject(() => assertSafeExtractionTarget("https://8.8.8.8/blog"));
+  await assert.doesNotReject(() => assertSafeExtractionTarget("https://[2606:4700::1111]/blog"));
 });
 
 test("assertSafeExtractionTarget resolves hostname without port suffix", async () => {
@@ -218,6 +221,43 @@ test("fetchWordPressByUrl throws when wp v2 and wp.com both empty with wp error"
   );
 });
 
+test("fetchWordPressByUrl validates and connects to approved addresses across public redirects", async () => {
+  const addresses = {
+    "example.com": "93.184.216.34",
+    "www.example.com": "93.184.216.35"
+  };
+  const resolutions = [];
+  const resolver = async (host) => {
+    resolutions.push(host);
+    return [{ address: addresses[host] }];
+  };
+  const mockFetch = async (input, { redirect, lookup }) => {
+    const url = new URL(input);
+    assert.equal(redirect, "manual");
+    const pinned = await new Promise((resolve, reject) => {
+      lookup(url.hostname, { all: true }, (error, records) => {
+        if (error) reject(error);
+        else resolve(records);
+      });
+    });
+    assert.deepEqual(pinned, [{ address: addresses[url.hostname], family: 4 }]);
+    if (url.hostname === "example.com") {
+      return {
+        status: 301,
+        headers: new Headers({ location: `https://www.example.com${url.pathname}${url.search}` })
+      };
+    }
+    if (url.pathname.endsWith("/posts")) {
+      return jsonResponse(200, [{ title: { rendered: "Migrated post" }, content: { rendered: "Hello" } }]);
+    }
+    return jsonResponse(200, []);
+  };
+
+  const items = await fetchWordPressByUrl("http://example.com", mockFetch, resolver);
+  assert.equal(items[0].title, "Migrated post");
+  assert.deepEqual(resolutions, ["example.com", "www.example.com"]);
+});
+
 test("detectPlatformByUrl and parsePixnetIdentity ignore port suffixes", () => {
   assert.equal(detectPlatformByUrl("https://alice.pixnet.net:8080/blog"), "pixnet");
   assert.equal(parsePixnetIdentity("https://alice.pixnet.net:8080/blog/post/1"), "alice");
@@ -245,7 +285,7 @@ test("fetchPixnetByUrl surfaces non-json payload errors", async () => {
     return jsonResponse(404, {});
   };
   await assert.rejects(
-    () => fetchPixnetByUrl("https://alice.pixnet.net/blog", mockFetch),
+    () => fetchPixnetByUrl("https://alice.pixnet.net/blog", mockFetch, publicResolver),
     /Unable to fetch PIXNET data from URL/
   );
 });
