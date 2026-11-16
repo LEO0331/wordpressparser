@@ -54,9 +54,14 @@ test("save/read/update/correct/rollback lifecycle works on filesystem backend", 
     normalizedItems: [{ title: "t", content: "c", date: "2026-01-01", url: "u" }]
   };
 
-  const first = await saveProfile(payload);
+  const first = await saveProfile(payload, { createOnly: true });
   assert.equal(first.slug, slug);
   assert.equal(first.storage, "filesystem");
+  await assert.rejects(
+    saveProfile({ ...payload, knowledgeMarkdown: "replacement" }, { createOnly: true }),
+    { code: "profile_already_exists" }
+  );
+  assert.deepEqual(await listProfileVersions(slug), []);
 
   const read1 = await readProfile(slug);
   assert.equal(read1.meta.name, "Unit Test");
@@ -114,6 +119,33 @@ test("readProfile falls back to legacy rag.json when wiki.md is missing", async 
   assert.ok(read.wikiMarkdown.includes("legacy chunk"));
 
   await cleanup();
+});
+
+test("filesystem create publishes only one complete profile after concurrent saves", async (t) => {
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  await cleanup();
+  t.after(cleanup);
+  const payload = {
+    slug,
+    meta: { name: "New Profile", slug },
+    knowledgeMarkdown: "first",
+    personaMarkdown: "p",
+    skillMarkdown: "s",
+    knowledgeAnalysis: {},
+    personaAnalysis: {}
+  };
+  await assert.rejects(saveProfile({ ...payload, skillMarkdown: undefined }, { createOnly: true }));
+  assert.ok(!(await listProfiles()).some((profile) => profile.slug === slug));
+
+  const results = await Promise.allSettled([
+    saveProfile(payload, { createOnly: true }),
+    saveProfile({ ...payload, knowledgeMarkdown: "second" }, { createOnly: true })
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.find((result) => result.status === "rejected").reason.code, "profile_already_exists");
+  const read = await readProfile(slug);
+  assert.equal(read.knowledgeMarkdown, results[0].status === "fulfilled" ? "first" : "second");
+  assert.deepEqual(await listProfileVersions(slug), []);
 });
 
 test("rollbackProfileStore rejects unsafe version values", async () => {

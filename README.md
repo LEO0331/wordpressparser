@@ -48,11 +48,13 @@ Open `http://localhost:3000`.
 - `BLOB_READ_WRITE_TOKEN` (optional, required for persistent storage on Vercel)
 - `WP_BASE_URL`, `WP_USERNAME`, `WP_APP_PASSWORD` (optional, for MCP sidecar)
 - `WP_API_VERSION` (optional, default `v2`, for MCP sidecar)
-- `ADMIN_API_KEY` (optional but recommended; protects admin-only profile mutation endpoints)
+- `ADMIN_API_KEY` (required to list, read, update, correct, or roll back stored profiles)
 
 Storage behavior:
-- If `BLOB_READ_WRITE_TOKEN` is present, profile data is saved to Vercel Blob.
+- If `BLOB_READ_WRITE_TOKEN` is present, profile data is saved to a **private** Vercel Blob store.
 - Otherwise, profile data is saved to local filesystem under `profiles/{slug}/`.
+
+When upgrading from a public Blob store, pause profile writes, create a private store, and copy the existing `profiles/` objects to the new store under the same pathnames. Point `BLOB_READ_WRITE_TOKEN` at the private store, set `ADMIN_API_KEY`, and verify authenticated profile reads and updates. Remove the old public `profiles/` and `idempotency/` objects after verifying the migration. Public blob URLs can remain cached after deletion. See [Vercel Blob storage and caching](https://vercel.com/docs/vercel-blob).
 
 ## Vercel deployment
 
@@ -65,7 +67,10 @@ Recommended project settings:
 - Environment Variables:
   - `OPENAI_API_KEY` (optional)
   - `OPENAI_MODEL` (optional)
-  - `BLOB_READ_WRITE_TOKEN` (required if you use profile save/update/rollback in production)
+  - `BLOB_READ_WRITE_TOKEN` (private store token required for persistent profiles and AI generation on Vercel)
+  - `ADMIN_API_KEY` (required for profile reads and administrative changes)
+
+Paid AI requests share a limit of 12 per minute and 200 per UTC day. Vercel stores the counter in the private Blob store so it is shared across instances. Standalone Node without Blob uses an in-memory counter per process. Requests above the limit receive `429` with `Retry-After`. Parser mode remains available without an AI allowance.
 
 ## API
 
@@ -100,7 +105,8 @@ Error responses keep the legacy top-level `error` string and also include a stru
 - `POST /api/build`
   - body: `{ "slug": "x", "name": "X", "items": [...], "options": { ... } }`
 - `POST /api/profiles/save`
-  - body: same as build, persists artifacts under `profiles/{slug}/`
+  - body: same as build, creates a new profile under `profiles/{slug}/`
+  - returns `409` when the slug is already in use
 - `GET /api/profiles`
   - query: `limit=1..100`, `starting_after=<profile_slug>`
   - response: `{ "object": "list", "data": [...], "profiles": [...], "has_more": false, "url": "/api/profiles" }`
@@ -113,6 +119,8 @@ Error responses keep the legacy top-level `error` string and also include a stru
   - body: `{ "version": "vN-....json" }`
 
 Admin-only endpoints:
+- `GET /api/profiles`
+- `GET /api/profiles/:slug`
 - `/api/profiles/:slug/update`
 - `/api/profiles/:slug/correct`
 - `/api/profiles/:slug/rollback`

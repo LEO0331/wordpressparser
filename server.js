@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeWordPressData } from "./src/parser.js";
 import { analyzeCorpus, buildProfileArtifacts, generateArtifacts } from "./src/generator.js";
+import { takeAiQuota } from "./src/ai_quota.js";
 import { fetchByUrl } from "./src/url_extract.js";
 import { convertWordPressXmlToObsidian, parseMultipartXmlUpload } from "./src/xml_bridge.js";
 import {
@@ -23,6 +24,7 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const ADMIN_API_KEY = String(process.env.ADMIN_API_KEY || "").trim();
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_REQUEST_DEPTH = 64;
 const API_VERSION = "2026-06-11";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,6 +117,7 @@ export function readAdminKey(req) {
 }
 
 export function requireAdminForMutation(req, res, next, expectedAdminKey = ADMIN_API_KEY) {
+  res.setHeader("Cache-Control", "no-store");
   if (!expectedAdminKey) {
     return sendSafeError(res, {
       status: 503,
@@ -122,7 +125,8 @@ export function requireAdminForMutation(req, res, next, expectedAdminKey = ADMIN
       context: "admin-auth"
     });
   }
-  if (readAdminKey(req) !== expectedAdminKey) {
+  const digest = (value) => crypto.createHash("sha256").update(value).digest();
+  if (!crypto.timingSafeEqual(digest(readAdminKey(req)), digest(expectedAdminKey))) {
     return sendSafeError(res, {
       status: 403,
       message: "Forbidden.",
@@ -132,14 +136,17 @@ export function requireAdminForMutation(req, res, next, expectedAdminKey = ADMIN
   return next();
 }
 
-function stableStringify(value) {
+function stableStringify(value, depth = 0) {
+  if (depth > MAX_REQUEST_DEPTH) {
+    throw Object.assign(new Error("Request JSON is too deeply nested."), { code: "request_too_deep" });
+  }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    return `[${value.map((item) => stableStringify(item, depth + 1)).join(",")}]`;
   }
   if (value && typeof value === "object") {
     return `{${Object.keys(value)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key], depth + 1)}`)
       .join(",")}}`;
   }
   return JSON.stringify(value);
@@ -168,14 +175,13 @@ function isFreshIdempotencyRecord(record) {
 
 function withIdempotency({ route, getSlug }, handler) {
   return async (req, res, next) => {
-    const key = readIdempotencyKey(req);
-    if (!key) return handler(req, res, next);
-
-    const slug = toSlug(getSlug(req));
-    const requestHash = hashValue({ body: req.body ?? null, params: req.params ?? null });
-    const recordKey = idempotencyRecordKey({ route, slug, key });
-
     try {
+      const key = readIdempotencyKey(req);
+      if (!key) return await handler(req, res, next);
+
+      const slug = toSlug(getSlug(req));
+      const requestHash = hashValue({ body: req.body ?? null, params: req.params ?? null });
+      const recordKey = idempotencyRecordKey({ route, slug, key });
       const existing = await readIdempotencyRecord(recordKey).catch(() => null);
       if (existing && isFreshIdempotencyRecord(existing)) {
         if (existing.requestHash !== requestHash) {
@@ -193,6 +199,7 @@ function withIdempotency({ route, getSlug }, handler) {
       let status = 200;
       let response;
       const proxyRes = Object.create(res);
+      proxyRes.setHeader = (...args) => res.setHeader(...args);
       proxyRes.status = (code) => {
         status = code;
         return proxyRes;
@@ -204,9 +211,9 @@ function withIdempotency({ route, getSlug }, handler) {
 
       await handler(req, proxyRes, next);
       if (response === undefined) return undefined;
+      if (status >= 400) return res.status(status).json(response);
 
       await writeIdempotencyRecord(recordKey, {
-        key,
         route,
         slug,
         requestHash,
@@ -216,6 +223,9 @@ function withIdempotency({ route, getSlug }, handler) {
       });
       return res.status(status).json(response);
     } catch (error) {
+      if (error.code === "request_too_deep") {
+        return sendApiError(res, { status: 400, code: error.code, message: error.message });
+      }
       return sendSafeError(res, {
         status: 500,
         message: "Failed to process idempotent request.",
@@ -224,6 +234,30 @@ function withIdempotency({ route, getSlug }, handler) {
       });
     }
   };
+}
+
+async function allowPaidGeneration(options, res) {
+  if (options.mode !== "ai" || !process.env.OPENAI_API_KEY) return true;
+  let retryAfter;
+  try {
+    retryAfter = await takeAiQuota();
+  } catch (error) {
+    sendSafeError(res, {
+      status: 503,
+      message: "AI mode is temporarily unavailable. Try parser mode.",
+      context: "ai-quota",
+      error
+    });
+    return false;
+  }
+  if (!retryAfter) return true;
+  res.setHeader("Retry-After", retryAfter);
+  sendApiError(res, {
+    status: 429,
+    code: "ai_rate_limit",
+    message: "AI request limit reached. Try again later or use parser mode."
+  });
+  return false;
 }
 
 app.get("/api/health", (_req, res) => {
@@ -256,7 +290,7 @@ app.post("/api/normalize", (req, res) => {
   }
 });
 
-app.post("/api/extract-url", async (req, res) => {
+export async function handleExtractUrlRequest(req, res, extract = fetchByUrl) {
   try {
     const url = req.body?.url;
     const platform = req.body?.platform ?? "auto";
@@ -268,7 +302,7 @@ app.post("/api/extract-url", async (req, res) => {
         param: "url"
       });
     }
-    const items = await fetchByUrl(url, platform);
+    const items = await extract(url, platform);
     res.json({
       items,
       metadata: { itemCount: items.length }
@@ -281,7 +315,9 @@ app.post("/api/extract-url", async (req, res) => {
       error
     });
   }
-});
+}
+
+app.post("/api/extract-url", (req, res) => handleExtractUrlRequest(req, res));
 
 export function handleConvertXmlRequest(req, res) {
   const knownClientCodes = new Set(["invalid_xml", "unsupported_format", "empty_export"]);
@@ -365,6 +401,7 @@ app.post("/api/build", async (req, res) => {
       });
     }
 
+    if (!(await allowPaidGeneration(options, res))) return;
     const artifacts = await buildProfileArtifacts({
       slug,
       name,
@@ -401,6 +438,7 @@ app.post(
         });
       }
 
+      if (!(await allowPaidGeneration(options, res))) return;
       const artifacts = await buildProfileArtifacts({
         slug,
         name,
@@ -419,13 +457,22 @@ app.post(
         personaAnalysis: artifacts.personaAnalysis,
         rawSource,
         normalizedItems: items
-      });
+      }, { createOnly: true });
 
       res.json({
         ...artifacts,
         storage: saveResult
       });
     } catch (error) {
+      if (error.code === "profile_already_exists") {
+        return sendApiError(res, {
+          status: 409,
+          type: "conflict_error",
+          code: error.code,
+          message: "This profile slug is already in use. Choose another slug.",
+          param: "slug"
+        });
+      }
       sendSafeError(res, {
         status: 500,
         message: "Failed to save profile.",
@@ -436,7 +483,7 @@ app.post(
   })
 );
 
-app.get("/api/profiles", async (req, res) => {
+app.get("/api/profiles", requireAdminForMutation, async (req, res) => {
   try {
     const profiles = await listProfiles();
     const limitInput = Number(req.query?.limit ?? 100);
@@ -466,7 +513,7 @@ app.get("/api/profiles", async (req, res) => {
   }
 });
 
-app.get("/api/profiles/:slug", async (req, res) => {
+app.get("/api/profiles/:slug", requireAdminForMutation, async (req, res) => {
   try {
     const profile = await readProfile(req.params.slug);
     const versions = await listProfileVersions(profile.slug);
@@ -511,6 +558,7 @@ app.post(
       }
 
       const prior = await readProfile(slug);
+      if (!(await allowPaidGeneration(options, res))) return;
       const artifacts = await buildProfileArtifacts({
         slug,
         name: prior.meta.name || slug,
@@ -615,6 +663,7 @@ app.post("/api/generate", async (req, res) => {
         param: "items"
       });
     }
+    if (!(await allowPaidGeneration(options, res))) return;
     const artifacts = await generateArtifacts(items, options);
     res.json(artifacts);
   } catch (error) {

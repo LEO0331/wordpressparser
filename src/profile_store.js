@@ -1,25 +1,20 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { put, list } from "@vercel/blob";
+import { del, get, list, put } from "@vercel/blob";
 import { buildSkillMarkdown } from "./skill_template.js";
 
 const PROFILE_ROOT = path.resolve(process.cwd(), "profiles");
-const blobDeps = {
+const defaultBlobDeps = {
   putImpl: put,
+  getImpl: get,
   listImpl: list,
-  fetchImpl: (...args) => fetch(...args)
+  deleteImpl: del
 };
+let blobDeps = defaultBlobDeps;
 
 export function setBlobDepsForTest(overrides = null) {
-  if (!overrides) {
-    blobDeps.putImpl = put;
-    blobDeps.listImpl = list;
-    blobDeps.fetchImpl = (...args) => fetch(...args);
-    return;
-  }
-  if (overrides.putImpl) blobDeps.putImpl = overrides.putImpl;
-  if (overrides.listImpl) blobDeps.listImpl = overrides.listImpl;
-  if (overrides.fetchImpl) blobDeps.fetchImpl = overrides.fetchImpl;
+  blobDeps = overrides ? { ...defaultBlobDeps, ...overrides } : defaultBlobDeps;
 }
 
 function blobEnabled() {
@@ -58,7 +53,7 @@ export function legacyRagToWikiMarkdown(rag, slug) {
 }
 
 export function toVersionId() {
-  return `v-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  return `v-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
 }
 
 async function exists(target) {
@@ -88,24 +83,24 @@ export function toSlug(input) {
     .slice(0, 60) || "author";
 }
 
-export async function writeBlob(pathname, content, putImpl = blobDeps.putImpl) {
+export async function writeBlob(pathname, content, { putImpl = blobDeps.putImpl, allowOverwrite = false } = {}) {
   await putImpl(pathname, content, {
-    access: "public",
+    access: "private",
     addRandomSuffix: false,
+    allowOverwrite,
     token: blobToken()
   });
 }
 
-export async function readBlob(pathname, listImpl = blobDeps.listImpl, fetchImpl = blobDeps.fetchImpl) {
-  const result = await listImpl({
-    prefix: pathname,
+export async function readBlob(pathname, getImpl = blobDeps.getImpl) {
+  const result = await getImpl(pathname, {
+    access: "private",
+    useCache: false,
     token: blobToken()
   });
-  const match = result.blobs.find((x) => x.pathname === pathname);
-  if (!match) throw new Error(`Blob not found: ${pathname}`);
-  const res = await fetchImpl(match.url);
-  if (!res.ok) throw new Error(`Failed to fetch blob: ${pathname}`);
-  return res.text();
+  if (!result) throw new Error(`Blob not found: ${pathname}`);
+  if (result.statusCode !== 200 || !result.stream) throw new Error(`Failed to fetch blob: ${pathname}`);
+  return new Response(result.stream).text();
 }
 
 export function isBlobNotFoundError(error) {
@@ -141,7 +136,7 @@ export async function readIdempotencyRecord(recordKey) {
 
 export async function writeIdempotencyRecord(recordKey, payload) {
   if (blobEnabled()) {
-    await writeBlob(idempotencyPath(recordKey), json(payload));
+    await writeBlob(idempotencyPath(recordKey), json(payload), { allowOverwrite: true });
     return;
   }
 
@@ -162,8 +157,7 @@ export function assertSafeVersionFilename(versionInput) {
   return version;
 }
 
-async function saveLocal(slug, payload) {
-  const profileDir = path.join(PROFILE_ROOT, slug);
+async function saveLocal(profileDir, payload) {
   await fs.mkdir(path.join(profileDir, "raw"), { recursive: true });
   await fs.mkdir(path.join(profileDir, "analysis"), { recursive: true });
   await fs.mkdir(path.join(profileDir, "versions"), { recursive: true });
@@ -181,20 +175,86 @@ async function saveLocal(slug, payload) {
   }
 }
 
-async function saveBlob(slug, payload) {
-  await Promise.all([
-    writeBlob(profilePath(slug, "meta.json"), json(payload.meta)),
-    writeBlob(profilePath(slug, "knowledge.md"), payload.knowledgeMarkdown),
-    writeBlob(profilePath(slug, "persona.md"), payload.personaMarkdown),
-    writeBlob(profilePath(slug, "skill.md"), payload.skillMarkdown),
-    writeBlob(profilePath(slug, "wiki.md"), payload.wikiMarkdown ?? ""),
-    writeBlob(profilePath(slug, "analysis/knowledge.analysis.json"), json(payload.knowledgeAnalysis)),
-    writeBlob(profilePath(slug, "analysis/persona.analysis.json"), json(payload.personaAnalysis)),
-    writeBlob(profilePath(slug, "raw/normalized.json"), json(payload.normalizedItems ?? []))
-  ]);
-  if (payload.rawSource !== undefined) {
-    await writeBlob(profilePath(slug, "raw/source.json"), json(payload.rawSource));
+function profileConflict(slug) {
+  return Object.assign(new Error(`Profile already exists: ${slug}`), { code: "profile_already_exists" });
+}
+
+async function createLocal(slug, profileDir, payload) {
+  await fs.mkdir(PROFILE_ROOT, { recursive: true });
+  const stagingDir = await fs.mkdtemp(path.join(PROFILE_ROOT, ".create-"));
+  try {
+    await saveLocal(stagingDir, payload);
+    try {
+      await fs.rename(stagingDir, profileDir);
+    } catch (error) {
+      if (await exists(profileDir)) throw profileConflict(slug);
+      throw error;
+    }
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true });
   }
+}
+
+async function readBlobMeta(slug) {
+  let raw;
+  try {
+    raw = await readBlob(profilePath(slug, "meta.json"));
+  } catch (error) {
+    if (isBlobNotFoundError(error)) return null;
+    throw error;
+  }
+  const storedMeta = parseJson(raw, {}) ?? {};
+  const id = storedMeta?.artifactSetId;
+  if (typeof id === "string" && /^[a-f0-9-]{36}$/.test(id)) {
+    return { meta: storedMeta.meta ?? {}, prefix: profilePath(slug, `artifacts/${id}/`), id };
+  }
+  return { meta: storedMeta, prefix: profilePath(slug, ""), id: null };
+}
+
+async function saveBlob(slug, payload, existing) {
+  const id = existing ? existing.id : randomUUID();
+  const prefix = existing ? existing.prefix : profilePath(slug, `artifacts/${id}/`);
+  const artifacts = [
+    ["knowledge.md", payload.knowledgeMarkdown],
+    ["persona.md", payload.personaMarkdown],
+    ["skill.md", payload.skillMarkdown],
+    ["wiki.md", payload.wikiMarkdown ?? ""],
+    ["analysis/knowledge.analysis.json", json(payload.knowledgeAnalysis)],
+    ["analysis/persona.analysis.json", json(payload.personaAnalysis)],
+    ["raw/normalized.json", json(payload.normalizedItems ?? [])]
+  ];
+  if (payload.rawSource !== undefined) {
+    artifacts.push(["raw/source.json", json(payload.rawSource)]);
+  }
+  const options = { allowOverwrite: Boolean(existing) };
+  const uploads = await Promise.allSettled(artifacts.map(([file, content]) =>
+    writeBlob(prefix + file, content, options)
+  ));
+  const failure = uploads.find((result) => result.status === "rejected");
+  if (failure) {
+    if (!existing) await deleteStagedBlobs(prefix, artifacts);
+    throw failure.reason;
+  }
+
+  // Publish complete new profiles by claiming the canonical metadata path without overwrite.
+  const meta = id ? { artifactSetId: id, meta: payload.meta } : payload.meta;
+  try {
+    await writeBlob(profilePath(slug, "meta.json"), json(meta), options);
+  } catch (error) {
+    if (existing) throw error;
+    const published = await readBlobMeta(slug);
+    if (published?.id === id) return;
+    if (published) {
+      await deleteStagedBlobs(prefix, artifacts);
+      throw profileConflict(slug);
+    }
+    // If the publication outcome is uncertain, keep staged data available to it.
+    throw error;
+  }
+}
+
+async function deleteStagedBlobs(prefix, artifacts) {
+  await blobDeps.deleteImpl(artifacts.map(([file]) => prefix + file), { token: blobToken() }).catch(() => {});
 }
 
 async function readLocal(slug) {
@@ -226,20 +286,22 @@ async function readLocal(slug) {
 }
 
 async function readBlobProfile(slug) {
-  const [meta, knowledgeMarkdown, personaMarkdown, skillMarkdown] = await Promise.all([
-    readBlob(profilePath(slug, "meta.json")),
-    readBlob(profilePath(slug, "knowledge.md")),
-    readBlob(profilePath(slug, "persona.md")),
-    readBlob(profilePath(slug, "skill.md"))
+  const stored = await readBlobMeta(slug);
+  if (!stored) throw new Error("Profile not found");
+  const { meta, prefix } = stored;
+  const [knowledgeMarkdown, personaMarkdown, skillMarkdown] = await Promise.all([
+    readBlob(prefix + "knowledge.md"),
+    readBlob(prefix + "persona.md"),
+    readBlob(prefix + "skill.md")
   ]);
 
   let wikiMarkdown = "";
   try {
-    wikiMarkdown = await readBlob(profilePath(slug, "wiki.md"));
+    wikiMarkdown = await readBlob(prefix + "wiki.md");
   } catch (error) {
     if (!isBlobNotFoundError(error)) throw error;
     try {
-      const legacyRagRaw = await readBlob(profilePath(slug, "rag.json"));
+      const legacyRagRaw = await readBlob(prefix + "rag.json");
       wikiMarkdown = legacyRagToWikiMarkdown(parseJson(legacyRagRaw, []), slug);
     } catch (legacyError) {
       if (!isBlobNotFoundError(legacyError)) throw legacyError;
@@ -250,7 +312,7 @@ async function readBlobProfile(slug) {
   return {
     slug,
     profileDir: `blob://profiles/${slug}`,
-    meta: parseJson(meta, {}),
+    meta,
     knowledgeMarkdown,
     personaMarkdown,
     skillMarkdown,
@@ -266,7 +328,9 @@ export async function readProfile(slugInput) {
 export async function readNormalizedItems(slugInput) {
   const slug = toSlug(slugInput);
   if (blobEnabled()) {
-    const raw = await readBlob(profilePath(slug, "raw/normalized.json"));
+    const stored = await readBlobMeta(slug);
+    if (!stored) throw new Error("Profile not found");
+    const raw = await readBlob(stored.prefix + "raw/normalized.json");
     return parseJson(raw, []);
   }
   const file = path.join(PROFILE_ROOT, slug, "raw", "normalized.json");
@@ -279,11 +343,11 @@ export async function listProfiles() {
     const blobs = await listBlobPrefix("profiles/");
     const map = new Map();
     for (const blob of blobs) {
-      if (!blob.pathname.endsWith("/meta.json")) continue;
-      const slug = blob.pathname.split("/")[1];
+      const [, slug] = /^profiles\/([a-z0-9_-]+)\/meta\.json$/.exec(blob.pathname) ?? [];
       if (!slug) continue;
-      const metaRaw = await blobDeps.fetchImpl(blob.url).then((r) => r.text());
-      const meta = parseJson(metaRaw, {});
+      const stored = await readBlobMeta(slug);
+      if (!stored) continue;
+      const { meta } = stored;
       map.set(slug, {
         slug,
         name: meta.name,
@@ -297,7 +361,7 @@ export async function listProfiles() {
 
   await fs.mkdir(PROFILE_ROOT, { recursive: true });
   const entries = await fs.readdir(PROFILE_ROOT, { withFileTypes: true });
-  const slugs = entries.filter((x) => x.isDirectory()).map((x) => x.name);
+  const slugs = entries.filter((x) => x.isDirectory() && !x.name.startsWith(".")).map((x) => x.name);
   const results = [];
   for (const slug of slugs) {
     const metaPath = path.join(PROFILE_ROOT, slug, "meta.json");
@@ -383,30 +447,27 @@ export async function rollbackProfileStore(slugInput, version) {
   return { restored: true, version: safeVersion };
 }
 
-export async function saveProfile(payload) {
+export async function saveProfile(payload, { createOnly = false } = {}) {
   const slug = toSlug(payload.slug);
-  let alreadyExists = false;
-  try {
-    await readProfile(slug);
-    alreadyExists = true;
-  } catch {
-    alreadyExists = false;
-  }
-  if (alreadyExists) {
-    await backupProfileStore(slug);
-  }
+  const useBlob = blobEnabled();
+  const profileDir = useBlob ? `blob://profiles/${slug}` : path.join(PROFILE_ROOT, slug);
+  const existing = useBlob ? await readBlobMeta(slug) : await exists(profileDir);
+  if (existing && createOnly) throw profileConflict(slug);
+  if (existing) await backupProfileStore(slug);
 
-  if (blobEnabled()) {
-    await saveBlob(slug, payload);
+  if (useBlob) {
+    await saveBlob(slug, payload, existing);
+  } else if (existing) {
+    await saveLocal(profileDir, payload);
   } else {
-    await saveLocal(slug, payload);
+    await createLocal(slug, profileDir, payload);
   }
 
   return {
     slug,
-    profileDir: blobEnabled() ? `blob://profiles/${slug}` : path.join(PROFILE_ROOT, slug),
-    alreadyExists,
-    storage: blobEnabled() ? "blob" : "filesystem"
+    profileDir,
+    alreadyExists: Boolean(existing),
+    storage: useBlob ? "blob" : "filesystem"
   };
 }
 
